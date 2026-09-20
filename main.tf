@@ -2,6 +2,7 @@ locals {
   remote_dir = "/home/${var.pi_user}"
   scripts = [
     "setup_host.sh",
+    "setup_wireguard.sh",
     "setup_forwarding_and_nat.sh",
     "setup_ap.sh",
     "uplink_wifi.sh",
@@ -30,6 +31,17 @@ locals {
     ssid   = var.ssid
     ap_net = var.ap_net
   })}"
+
+  # Strips any "DNS = ..." line: wg-quick would try to manage the Pi's own
+  # system resolver via resolvconf/systemd-resolved when bringing the
+  # interface up, which isn't needed here (the Pi doesn't need to resolve
+  # names through the tunnel) and would fail hard if neither is installed.
+  # Routing (the [Peer] AllowedIPs) is unaffected - only interface-level DNS
+  # management is removed.
+  wireguard_conf = join("\n", [
+    for line in split("\n", var.wireguard_client_config) :
+    line if !startswith(trimspace(line), "DNS")
+  ])
 
   env_file = templatefile("${path.module}/templates/wireguard-ap.env.tftpl", {
     pi_user    = var.pi_user
@@ -63,11 +75,12 @@ resource "terraform_data" "ap_deploy" {
   }
 
   triggers_replace = {
-    env_file    = sha256(local.env_file)
-    scripts     = sha256(join("", [for f in local.scripts : filesha256("${path.module}/scripts/${f}")]))
-    motd        = sha256(local.motd)
-    mode        = var.mode
-    uplink_band = var.uplink_band
+    env_file       = sha256(local.env_file)
+    scripts        = sha256(join("", [for f in local.scripts : filesha256("${path.module}/scripts/${f}")]))
+    motd           = sha256(local.motd)
+    wireguard_conf = sha256(local.wireguard_conf)
+    mode           = var.mode
+    uplink_band    = var.uplink_band
   }
 
   connection {
@@ -89,6 +102,19 @@ resource "terraform_data" "ap_deploy" {
   provisioner "file" {
     source      = "${path.module}/scripts/setup_host.sh"
     destination = "${local.remote_dir}/setup_host.sh"
+  }
+
+  provisioner "file" {
+    source      = "${path.module}/scripts/setup_wireguard.sh"
+    destination = "${local.remote_dir}/setup_wireguard.sh"
+  }
+
+  # May be empty (wireguard_client_config not supplied, e.g. tofu invoked
+  # directly rather than through wga) - the remote-exec step below only
+  # actually runs setup_wireguard.sh when this staged file is non-empty.
+  provisioner "file" {
+    content     = local.wireguard_conf
+    destination = "${local.remote_dir}/.wg0.conf"
   }
 
   provisioner "file" {
@@ -127,13 +153,20 @@ resource "terraform_data" "ap_deploy" {
     ]
   }
 
-  # setup_host.sh, setup_forwarding_and_nat.sh and setup_ap.sh all
-  # self-elevate with sudo internally (no sudo prefix needed at the call
-  # site here), so sudoers can be scoped to just these script paths rather
-  # than granting NOPASSWD for everything - see README's sudoers section.
+  # setup_host.sh, setup_wireguard.sh, setup_forwarding_and_nat.sh and
+  # setup_ap.sh all self-elevate with sudo internally (no sudo prefix
+  # needed at the call site here), so sudoers can be scoped to just these
+  # script paths rather than granting NOPASSWD for everything - see
+  # README's sudoers section.
+  #
+  # Order matters: setup_host.sh installs wireguard-tools first; wg0 needs
+  # to exist before setup_forwarding_and_nat.sh's NAT rule excludes it (in
+  # practice nftables would accept a rule naming an interface that doesn't
+  # exist yet, but bringing wg0 up first avoids relying on that).
   provisioner "remote-exec" {
     inline = [
       "${local.remote_dir}/setup_host.sh ${var.reg_domain}",
+      "if [ -s ${local.remote_dir}/.wg0.conf ]; then ${local.remote_dir}/setup_wireguard.sh; else rm -f ${local.remote_dir}/.wg0.conf; fi",
       "${local.remote_dir}/setup_forwarding_and_nat.sh",
       "${local.remote_dir}/setup_ap.sh ${var.mode} ${var.uplink_band}",
     ]

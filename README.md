@@ -7,13 +7,13 @@ running them.
 This is meant to work alongside
 [wireguard-router](https://github.com/georgenicoll/wireguard-router), a
 separate OpenTofu project that stands up a WireGuard endpoint on a cloud
-provider. The intent is for the Pi to also act as a WireGuard peer, so that
-devices connected to this travel AP get routed through that WireGuard
-endpoint and can reach the other peers on that network — a phone on the AP
-should be able to see home network resources the same way a laptop connected
-directly by WireGuard would. **The WireGuard side of that isn't wired up
-yet** — this project currently only handles the AP itself; the WireGuard
-peer configuration is the next piece of work.
+provider. The Pi also acts as a WireGuard peer of that endpoint, so devices
+connected to this travel AP get routed through it and can reach the other
+peers on that network — a phone on the AP can see home network resources the
+same way a laptop connected directly by WireGuard would. The Pi's own
+internet access is untouched: wireguard-router's peer routes are `"auto"`
+(tunnel network plus other peers' LANs, not `0.0.0.0/0`), so bringing up the
+tunnel doesn't hijack the Pi's default route.
 
 Unlike wireguard-router, this project doesn't create any infrastructure — the
 Pi already exists. `apply` just pushes config and scripts to it and (re-)runs
@@ -51,13 +51,13 @@ login banner - see below) is fetched automatically the first time you run
 
   If needed, grant `NOPASSWD` for just the scripts this project uploads and
   self-elevates with `sudo` internally (`setup_host.sh`,
-  `setup_forwarding_and_nat.sh`, `setup_ap.sh`, `uplink_wifi.sh`), not root
-  access in general:
+  `setup_wireguard.sh`, `setup_forwarding_and_nat.sh`, `setup_ap.sh`,
+  `uplink_wifi.sh`), not root access in general:
   ```bash
   PI_USER=changeme   # <-- OVERWRITE with your real pi_user before running this
 
   cat <<EOF | sudo tee "/etc/sudoers.d/010-${PI_USER}-wireguard-ap"
-  ${PI_USER} ALL=(root) NOPASSWD: /home/${PI_USER}/setup_host.sh, /home/${PI_USER}/setup_forwarding_and_nat.sh, NOPASSWD:SETENV: /home/${PI_USER}/setup_ap.sh, NOPASSWD: /home/${PI_USER}/uplink_wifi.sh
+  ${PI_USER} ALL=(root) NOPASSWD: /home/${PI_USER}/setup_host.sh, /home/${PI_USER}/setup_wireguard.sh, /home/${PI_USER}/setup_forwarding_and_nat.sh, NOPASSWD:SETENV: /home/${PI_USER}/setup_ap.sh, NOPASSWD: /home/${PI_USER}/uplink_wifi.sh
   EOF
   sudo chmod 0440 "/etc/sudoers.d/010-${PI_USER}-wireguard-ap"
   sudo visudo -c   # validates syntax - a bad sudoers file can lock out sudo entirely
@@ -90,12 +90,29 @@ export WGA_CONFIG=~/private/wireguard-ap.tfvars
 export WGA_STATE_DIR=~/private/wireguard-ap-state   # keeps secrets out of the repo
 ```
 
-The values you must fill in: `pi_host`, `pi_user`, `ssid`, `psk`. Everything
-else has a working default — see [variables.tf](variables.tf) or the comments
-in [wireguard-ap.example.tfvars](wireguard-ap.example.tfvars).
+The values you must fill in: `pi_host`, `pi_user`, `ssid`, `psk`,
+`wireguard_client_name`. Everything else has a working default — see
+[variables.tf](variables.tf) or the comments in
+[wireguard-ap.example.tfvars](wireguard-ap.example.tfvars).
 
 Put the two `export` lines in your shell profile or a direnv `.envrc`, or you
 will be re-typing them every session.
+
+`wireguard_client_name` is this Pi's peer name in **wireguard-router**'s own
+key store (register it there first with
+`./scripts/wg-peer.sh add <name> <ip> --lan <ap_net>` if it doesn't exist
+yet - see that project's README). `wga` fetches the actual client config
+itself, via wireguard-router's `scripts/wg-peer.sh` - nothing else to set
+here, and nothing from it is ever written to disk. This needs:
+
+```bash
+export WGR_CONFIG=~/private/wireguard-router.tfvars   # wireguard-router's own config
+export WGR_REPO_DIR=~/code/wireguard-router            # defaults to ../wireguard-router
+```
+
+(or `WGR_KEYS` instead of `WGR_CONFIG` - see `wga`'s own comments and
+wireguard-router's README). If you already work with wireguard-router from
+the same shell, these are likely set already.
 
 **4. Deploy.**
 
@@ -133,12 +150,12 @@ changing behaviour) and re-apply — see
 
 | Path | Role |
 | --- | --- |
-| `main.tf` | One `terraform_data` resource: opens an SSH connection, uploads the 5 scripts and a rendered env file, then runs the host setup and AP setup scripts. |
+| `main.tf` | One `terraform_data` resource: opens an SSH connection, uploads the 6 scripts and a rendered env file, then runs the host, WireGuard, forwarding and AP setup scripts. |
 | `templates/wireguard-ap.env.tftpl` | Renders your config into a `KEY='value'` file the scripts `source` on the Pi, instead of having their settings hardcoded. |
 | `templates/motd.tftpl` + `ascii/monkeynuthead.txt` + `templates/AP.txt` | Combined into `~/.wireguard-ap-motd` and printed by a snippet appended to `pi_user`'s own `~/.bashrc` on every interactive login: the shared "monkey / nut / head" banner (from the [ascii](https://github.com/georgenicoll/ascii) submodule), "AP" underneath it in the same style but kept local to this repo since it's project-specific, then a summary of the available scripts plus the current SSID and subnet. Per-user rather than system-wide (`/etc/motd`), and needs no root at all. |
-| `scripts/*.sh` | The Pi-side scripts, uploaded byte-for-byte (not passed through `templatefile()`, since they use bash `${VAR}` inside heredocs that would collide with OpenTofu's own templating). `setup_host.sh` (packages, stock services, Wi-Fi country, radio unblock - the one-time-ish setup that used to be inline `sudo` commands in `main.tf`), `setup_ap.sh`, `setup_forwarding_and_nat.sh` and `uplink_wifi.sh` all self-elevate with `sudo` internally (`[[ $EUID -eq 0 ]] \|\| exec sudo "$SCRIPT" "$@"`) rather than being invoked with `sudo` at the call site, so sudoers can be scoped to exactly these script paths - see step 2 above. |
+| `scripts/*.sh` | The Pi-side scripts, uploaded byte-for-byte (not passed through `templatefile()`, since they use bash `${VAR}` inside heredocs that would collide with OpenTofu's own templating). `setup_host.sh` (packages, stock services, Wi-Fi country, radio unblock - the one-time-ish setup that used to be inline `sudo` commands in `main.tf`), `setup_wireguard.sh`, `setup_ap.sh`, `setup_forwarding_and_nat.sh` and `uplink_wifi.sh` all self-elevate with `sudo` internally (`[[ $EUID -eq 0 ]] \|\| exec sudo "$SCRIPT" "$@"`) rather than being invoked with `sudo` at the call site, so sudoers can be scoped to exactly these script paths - see step 2 above. |
 | `variables.tf` / `outputs.tf` / `versions.tf` | The input/output contract and provider requirement (`hashicorp/null` only — no cloud provider). |
-| `wga` | Thin wrapper around `tofu`, same idea as wireguard-router's `wgr`. |
+| `wga` | Thin wrapper around `tofu`, same idea as wireguard-router's `wgr` - also fetches the WireGuard client config named by `wireguard_client_name` via wireguard-router's own `scripts/wg-peer.sh`. |
 
 Config is kept deliberately minimal: most of the Pi-side network settings
 (`ap_ip`, the DHCP range, the dnsmasq netmask, the bridge name) are **derived**
@@ -159,7 +176,9 @@ the comments in `main.tf`.
 | Variable | Purpose |
 | --- | --- |
 | `WGA_CONFIG` | Path to your private `.tfvars` file. Required for `plan`/`apply`/`destroy`/`refresh`/`import`/`console`. |
-| `WGA_STATE_DIR` | Keep state outside the repo. Recommended — state contains the Wi-Fi PSK. |
+| `WGA_STATE_DIR` | Keep state outside the repo. Recommended — state contains the Wi-Fi PSK and the fetched WireGuard client config. |
+| `WGR_REPO_DIR` | Path to a wireguard-router checkout, to run its `scripts/wg-peer.sh`. Defaults to `../wireguard-router`. Only needed when `wireguard_client_name` is set. |
+| `WGR_CONFIG` / `WGR_KEYS` | wireguard-router's own env vars, needed for the above — see its README. |
 
 ## Usage
 
@@ -190,13 +209,18 @@ the comments in `main.tf`.
 **Re-apply** (`./wga apply` again) is safe and idempotent, but it isn't
 unconditional: OpenTofu only re-runs the upload-and-setup steps when
 something the deployment depends on has actually changed — your tfvars, any
-of the 4 scripts, or `mode`/`uplink_band`. If nothing changed, `apply` reports
-no changes and doesn't touch the Pi. If something did change, it re-uploads
-all 4 scripts and the env file (overwriting what's already there) and reruns
-the one-time host setup, `setup_forwarding_and_nat.sh` and
-`setup_ap.sh <mode> <band>`. Those scripts are written to be safely re-run —
-they delete and recreate their own configs/units and restart services — so a
-full re-run is the expected, harmless outcome of a config change.
+of the 6 scripts, the fetched WireGuard client config, or `mode`/`uplink_band`
+(the client config is fetched fresh on every invocation, so a change on the
+wireguard-router side, e.g. a rotated key, is picked up automatically without
+you needing to change anything in wireguard-ap's own tfvars). If nothing
+changed, `apply` reports no changes and doesn't touch the Pi. If something did
+change, it re-uploads all 6 scripts and the env file (overwriting what's
+already there) and reruns `setup_host.sh`, `setup_wireguard.sh` (if a client
+config was fetched), `setup_forwarding_and_nat.sh` and
+`setup_ap.sh <mode> <band>`, in that order. Those scripts are written to be
+safely re-run — they delete and recreate their own configs/units and restart
+services — so a full re-run is the expected, harmless outcome of a config
+change.
 
 **`destroy` does not undo anything on the Pi.** It only removes OpenTofu's
 record of having deployed there — there's no destroy-time provisioner, so
@@ -215,6 +239,17 @@ that automatically.
   network with `uplink_wifi.sh` (manual step, see above).
 - **Internet**: `eth0` when connected (priority), falling back to `wlan0` in
   `uplink` mode. NAT/masquerade out through whichever uplink is active.
+- **WireGuard**: if `wireguard_client_name` is set, `wg0` connects to
+  wireguard-router as that peer. AP clients get routed to wireguard-router's
+  tunnel network and every other peer's LAN (whatever that peer's own
+  `AllowedIPs` covers - typically `"auto"` on the wireguard-router side, not
+  full-tunnel internet, so this doesn't touch the Pi's own default route).
+  `wg0` traffic is **not** NAT'd by `setup_forwarding_and_nat.sh` (unlike the
+  real internet uplink), so each AP client's real address is visible to the
+  rest of the mesh rather than collapsing into the Pi's own tunnel IP - this
+  only works end-to-end if this peer was registered on the wireguard-router
+  side with `--lan <ap_net>`, so other peers know to route that subnet back
+  here. Monitor with `sudo wg show all` on the Pi.
 - **DHCP/DNS**: `dnsmasq` on `br-ap`, range and netmask derived from `ap_net`;
   clients get the Pi as DNS, which forwards to the Pi's own resolver.
 - **Always reachable**: the bridge and hostapd units are hotplug-safe — the
@@ -250,6 +285,16 @@ were built from.
   specifically so `apply` works without internet access, once it's been
   fetched at least once - `wga` fetches it automatically if missing, so
   this only matters if you're invoking `tofu` directly instead.
+- The fetched WireGuard client config's `DNS =` line is stripped before it
+  reaches the Pi (`main.tf`'s `local.wireguard_conf`): `wg-quick` would
+  otherwise try to manage the Pi's own system resolver via
+  `resolvconf`/`systemd-resolved` when bringing `wg0` up, which isn't needed
+  here and would fail hard if neither is installed. Routing is unaffected -
+  only interface-level DNS management is removed.
+- `wireguard_client_config` is fetched fresh on every `wga` invocation and
+  never written to disk by this project (it does end up in OpenTofu state,
+  same as `psk`) - editing wireguard-ap's own tfvars can't change it; that
+  has to happen on the wireguard-router side (`scripts/wg-peer.sh update`).
 
 ## Layout
 
@@ -262,6 +307,7 @@ templates/motd.tftpl
 templates/AP.txt
 ascii/                          git submodule: github.com/georgenicoll/ascii (auto-fetched by wga)
 scripts/setup_host.sh
+scripts/setup_wireguard.sh
 scripts/setup_forwarding_and_nat.sh
 scripts/setup_ap.sh
 scripts/uplink_wifi.sh

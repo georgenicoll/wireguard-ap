@@ -12,13 +12,19 @@ source "$ENV_FILE"
 echo "net.ipv4.ip_forward=1" | tee /etc/sysctl.d/90-mnet-ap.conf >/dev/null
 sysctl -w net.ipv4.ip_forward=1
 
+# wg0 is deliberately excluded: wireguard-router's mesh is set up site-to-
+# site (wireguard_nat = false there, and this Pi is registered with --lan
+# rather than just its own tunnel address), so traffic headed into the
+# tunnel keeps each AP client's real source address rather than all of them
+# collapsing into the Pi's own tunnel IP. Only the real internet uplink
+# (eth0/wlan0) gets masqueraded.
 tee /etc/nftables-mnet-ap.conf >/dev/null <<EOF
 add table ip mnet_ap
 delete table ip mnet_ap
 table ip mnet_ap {
   chain postrouting {
     type nat hook postrouting priority srcnat; policy accept;
-    ip saddr ${AP_NET} oifname != "${BR}" masquerade
+    ip saddr ${AP_NET} oifname != "${BR}" oifname != "wg0" masquerade
   }
 }
 EOF

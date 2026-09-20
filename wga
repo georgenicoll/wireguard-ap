@@ -15,6 +15,14 @@
 #   WGA_STATE_DIR  optional directory to keep state in, instead of this repo.
 #                  State contains the Wi-Fi PSK, so a private, backed-up
 #                  location is sensible.
+#   WGR_REPO_DIR   path to a wireguard-router checkout, used to fetch the
+#                  WireGuard client config named by wireguard_client_name in
+#                  your tfvars (via its scripts/wg-peer.sh). Defaults to
+#                  ../wireguard-router next to this repo. Only needed when
+#                  wireguard_client_name is set.
+#   WGR_CONFIG /   wireguard-router's own env vars, needed for the above -
+#   WGR_KEYS       see wireguard-router's README. Typically already set by
+#                  sourcing whatever environment script you use for that repo.
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -73,6 +81,39 @@ MSG
     fi
     # Absolute, because -chdir changes how relative paths resolve.
     ARGS+=("-var-file=$CONFIG_PATH")
+
+    # wireguard_client_name in the tfvars picks which wireguard-router peer
+    # this Pi uses. Fetch that peer's client config fresh on every run -
+    # never written to disk here - via wireguard-router's own
+    # scripts/wg-peer.sh, rather than duplicating its key-management logic
+    # in this repo. Required in variables.tf, so it should always be
+    # present; if it's genuinely absent, tofu's own validation will say so.
+    CLIENT_NAME="$(sed -nE 's/^[[:space:]]*wireguard_client_name[[:space:]]*=[[:space:]]*"([^"]*)".*/\1/p' "$CONFIG_PATH" | tail -1)"
+    if [[ -n "$CLIENT_NAME" ]]; then
+        WGR_REPO_DIR="${WGR_REPO_DIR:-$REPO_DIR/../wireguard-router}"
+        WG_PEER_SCRIPT="$WGR_REPO_DIR/scripts/wg-peer.sh"
+        if [[ ! -x "$WG_PEER_SCRIPT" ]]; then
+            cat >&2 <<MSG
+error: cannot find wireguard-router's scripts/wg-peer.sh at:
+  $WG_PEER_SCRIPT
+
+Set WGR_REPO_DIR to your wireguard-router checkout, e.g.:
+  export WGR_REPO_DIR=~/code/wireguard-router
+MSG
+            exit 1
+        fi
+        if [[ -z "${WGR_CONFIG:-}" && -z "${WGR_KEYS:-}" ]]; then
+            cat >&2 <<MSG
+error: WGR_CONFIG or WGR_KEYS must be set to fetch the '$CLIENT_NAME' client
+config from wireguard-router's key store. These are wireguard-router's own
+env vars (see its README) - typically already set by sourcing whatever
+environment script you use for that repo, alongside WGA_CONFIG.
+MSG
+            exit 1
+        fi
+        TF_VAR_wireguard_client_config="$("$WG_PEER_SCRIPT" client "$CLIENT_NAME")"
+        export TF_VAR_wireguard_client_config
+    fi
     ;;
 esac
 
