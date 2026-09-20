@@ -40,14 +40,19 @@ login banner - see below) is fetched automatically the first time you run
 - A user (set via `pi_user`, no default) with **passwordless sudo for this
   project's scripts** and your **SSH public key** already authorized
   (`~/.ssh/authorized_keys` on the Pi) — OpenTofu connects to an existing
-  account, it doesn't create one. Being in the `sudo` group is **not** enough
-  on its own - that still prompts for a password, which the SSH provisioner
-  has no way to answer (no TTY). Confirm with
-  `ssh <pi_user>@<pi_host> sudo -n true` (silent = fine, "a password is
-  required" = not set up yet); if needed, grant `NOPASSWD` for just the
-  scripts this project uploads and self-elevates with `sudo` internally
-  (`setup_host.sh`, `setup_forwarding_and_nat.sh`, `setup_ap.sh`,
-  `uplink_wifi.sh`), not root access in general:
+  account, it doesn't create one.
+
+  Being in the `sudo` group is **not** enough on its own - that still
+  prompts for a password, which the SSH provisioner has no way to answer
+  (no TTY).
+
+  Confirm with `ssh <pi_user>@<pi_host> sudo -n true` (silent = fine, "a
+  password is required" = not set up yet).
+
+  If needed, grant `NOPASSWD` for just the scripts this project uploads and
+  self-elevates with `sudo` internally (`setup_host.sh`,
+  `setup_forwarding_and_nat.sh`, `setup_ap.sh`, `uplink_wifi.sh`), not root
+  access in general:
   ```bash
   cat <<EOF | sudo tee /etc/sudoers.d/010-<pi_user>-wireguard-ap
   <pi_user> ALL=(root) NOPASSWD: /home/<pi_user>/setup_host.sh, /home/<pi_user>/setup_forwarding_and_nat.sh, /home/<pi_user>/setup_ap.sh, /home/<pi_user>/uplink_wifi.sh
