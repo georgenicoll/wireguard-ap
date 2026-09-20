@@ -130,7 +130,7 @@ changing behaviour) and re-apply — see
 | --- | --- |
 | `main.tf` | One `terraform_data` resource: opens an SSH connection, uploads the 5 scripts and a rendered env file, then runs the host setup and AP setup scripts. |
 | `templates/wireguard-ap.env.tftpl` | Renders your config into a `KEY='value'` file the scripts `source` on the Pi, instead of having their settings hardcoded. |
-| `templates/motd.txt` + `ascii/monkeynuthead.txt` + `templates/AP.txt` | Combined into `~/.wireguard-ap-motd` and printed by a snippet appended to `pi_user`'s own `~/.bashrc` on every interactive login: the shared "monkey / nut / head" banner (from the [ascii](https://github.com/georgenicoll/ascii) submodule), "AP" underneath it in the same style but kept local to this repo since it's project-specific, then a summary of the available scripts. Per-user rather than system-wide (`/etc/motd`), and needs no root at all. |
+| `templates/motd.tftpl` + `ascii/monkeynuthead.txt` + `templates/AP.txt` | Combined into `~/.wireguard-ap-motd` and printed by a snippet appended to `pi_user`'s own `~/.bashrc` on every interactive login: the shared "monkey / nut / head" banner (from the [ascii](https://github.com/georgenicoll/ascii) submodule), "AP" underneath it in the same style but kept local to this repo since it's project-specific, then a summary of the available scripts plus the current SSID and subnet. Per-user rather than system-wide (`/etc/motd`), and needs no root at all. |
 | `scripts/*.sh` | The Pi-side scripts, uploaded byte-for-byte (not passed through `templatefile()`, since they use bash `${VAR}` inside heredocs that would collide with OpenTofu's own templating). `setup_host.sh` (packages, stock services, Wi-Fi country, radio unblock - the one-time-ish setup that used to be inline `sudo` commands in `main.tf`), `setup_ap.sh`, `setup_forwarding_and_nat.sh` and `uplink_wifi.sh` all self-elevate with `sudo` internally (`[[ $EUID -eq 0 ]] \|\| exec sudo "$SCRIPT" "$@"`) rather than being invoked with `sudo` at the call site, so sudoers can be scoped to exactly these script paths - see step 2 above. |
 | `variables.tf` / `outputs.tf` / `versions.tf` | The input/output contract and provider requirement (`hashicorp/null` only — no cloud provider). |
 | `wga` | Thin wrapper around `tofu`, same idea as wireguard-router's `wgr`. |
@@ -253,7 +253,7 @@ wga                             driver script: ./wga <tofu command>
 wireguard-ap.example.tfvars     template for your private config file
 main.tf / variables.tf / outputs.tf / versions.tf
 templates/wireguard-ap.env.tftpl
-templates/motd.txt
+templates/motd.tftpl
 templates/AP.txt
 ascii/                          git submodule: github.com/georgenicoll/ascii (auto-fetched by wga)
 scripts/setup_host.sh

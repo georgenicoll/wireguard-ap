@@ -26,7 +26,10 @@ locals {
   # Printed only for pi_user's own interactive shells (via a ~/.bashrc
   # snippet below), not system-wide via /etc/motd - other accounts on the
   # Pi, if any, don't see it, and installing it needs no root at all.
-  motd = "${local.banner}\n\n${file("${path.module}/templates/motd.txt")}"
+  motd = "${local.banner}\n\n${templatefile("${path.module}/templates/motd.tftpl", {
+    ssid   = var.ssid
+    ap_net = var.ap_net
+  })}"
 
   env_file = templatefile("${path.module}/templates/wireguard-ap.env.tftpl", {
     pi_user    = var.pi_user
