@@ -57,14 +57,19 @@ login banner - see below) is fetched automatically the first time you run
   PI_USER=changeme   # <-- OVERWRITE with your real pi_user before running this
 
   cat <<EOF | sudo tee "/etc/sudoers.d/010-${PI_USER}-wireguard-ap"
-  ${PI_USER} ALL=(root) NOPASSWD: /home/${PI_USER}/setup_host.sh, /home/${PI_USER}/setup_forwarding_and_nat.sh, /home/${PI_USER}/setup_ap.sh, /home/${PI_USER}/uplink_wifi.sh
+  ${PI_USER} ALL=(root) NOPASSWD: /home/${PI_USER}/setup_host.sh, /home/${PI_USER}/setup_forwarding_and_nat.sh, NOPASSWD:SETENV: /home/${PI_USER}/setup_ap.sh, NOPASSWD: /home/${PI_USER}/uplink_wifi.sh
   EOF
   sudo chmod 0440 "/etc/sudoers.d/010-${PI_USER}-wireguard-ap"
   sudo visudo -c   # validates syntax - a bad sudoers file can lock out sudo entirely
   ```
   A bare script path with no arguments listed permits *any* arguments to
   that script, so `dual`/`uplink`, the SSID/password, etc. all still work -
-  sudo just won't run anything *else* as root for this account. The login
+  sudo just won't run anything *else* as root for this account. `setup_ap.sh`
+  additionally needs the `SETENV` tag: it re-execs itself as
+  `sudo --preserve-env=SSH_CONNECTION` so that, once elevated, it can still
+  tell whether the original SSH session came in over Wi-Fi (see its
+  comments) - without `SETENV`, sudo refuses to preserve that variable at
+  all, even though the script itself is otherwise permitted. The login
   banner needs no root at all (see below), so it's not in this list.
 - The onboard radio (`wlan0`, driver `brcmfmac`) and, for dual-band or a
   5 GHz AP, a USB adapter that supports AP mode (`wlan1`, driver `mt7921u`
