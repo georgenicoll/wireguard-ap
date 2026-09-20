@@ -54,10 +54,12 @@ login banner - see below) is fetched automatically the first time you run
   `setup_forwarding_and_nat.sh`, `setup_ap.sh`, `uplink_wifi.sh`), not root
   access in general:
   ```bash
-  cat <<EOF | sudo tee /etc/sudoers.d/010-<pi_user>-wireguard-ap
-  <pi_user> ALL=(root) NOPASSWD: /home/<pi_user>/setup_host.sh, /home/<pi_user>/setup_forwarding_and_nat.sh, /home/<pi_user>/setup_ap.sh, /home/<pi_user>/uplink_wifi.sh
+  PI_USER=changeme   # <-- OVERWRITE with your real pi_user before running this
+
+  cat <<EOF | sudo tee "/etc/sudoers.d/010-${PI_USER}-wireguard-ap"
+  ${PI_USER} ALL=(root) NOPASSWD: /home/${PI_USER}/setup_host.sh, /home/${PI_USER}/setup_forwarding_and_nat.sh, /home/${PI_USER}/setup_ap.sh, /home/${PI_USER}/uplink_wifi.sh
   EOF
-  sudo chmod 0440 /etc/sudoers.d/010-<pi_user>-wireguard-ap
+  sudo chmod 0440 "/etc/sudoers.d/010-${PI_USER}-wireguard-ap"
   sudo visudo -c   # validates syntax - a bad sudoers file can lock out sudo entirely
   ```
   A bare script path with no arguments listed permits *any* arguments to
