@@ -39,7 +39,16 @@ login banner - see below) is fetched automatically the first time you run
 - Raspberry Pi OS (Bookworm-style), reachable over SSH on `eth0`.
 - A user (set via `pi_user`, no default) with **passwordless sudo** and your
   **SSH public key** already authorized (`~/.ssh/authorized_keys` on the Pi)
-  — OpenTofu connects to an existing account, it doesn't create one.
+  — OpenTofu connects to an existing account, it doesn't create one. Being in
+  the `sudo` group is **not** enough on its own - that still prompts for a
+  password, which the SSH provisioner has no way to answer (no TTY). Confirm
+  with `ssh <pi_user>@<pi_host> sudo -n true` (silent = fine, "a password is
+  required" = not set up yet); if needed:
+  ```bash
+  echo '<pi_user> ALL=(ALL) NOPASSWD:ALL' | sudo tee /etc/sudoers.d/010-<pi_user>-nopasswd
+  sudo chmod 0440 /etc/sudoers.d/010-<pi_user>-nopasswd
+  sudo visudo -c   # validates syntax - a bad sudoers file can lock out sudo entirely
+  ```
 - The onboard radio (`wlan0`, driver `brcmfmac`) and, for dual-band or a
   5 GHz AP, a USB adapter that supports AP mode (`wlan1`, driver `mt7921u`
   in the reference setup).
