@@ -23,7 +23,7 @@ EOF
 
 sudo tee /etc/systemd/system/mnet-ap-nat.service >/dev/null <<'EOF'
 [Unit]
-Description=NAT for mnet-on-the-road AP
+Description=NAT for mnet-ap AP
 After=network-pre.target
 Wants=network-pre.target
 

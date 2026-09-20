@@ -96,7 +96,6 @@ unmanaged-devices=${UNMANAGED}
 EOF
 nmcli general reload
 
-nmcli con delete mnet-on-the-road 2>/dev/null || true    # old single-radio profile
 nmcli con delete "$BR" 2>/dev/null || true
 nmcli con add type bridge con-name "$BR" ifname "$BR" \
   bridge.stp no \
@@ -109,7 +108,7 @@ nmcli con up "$BR" || true
 # --- hostapd unit: starts when the interface appears (hotplug-safe) ---------
 cat >/etc/systemd/system/mnet-hostapd@.service <<'EOF'
 [Unit]
-Description=hostapd for mnet-on-the-road on %i
+Description=hostapd for mnet-ap on %i
 BindsTo=sys-subsystem-net-devices-%i.device
 After=sys-subsystem-net-devices-%i.device NetworkManager.service
 Wants=NetworkManager.service
@@ -128,8 +127,8 @@ EOF
 
 # --- dnsmasq on the bridge ---------------------------------------------------
 # Clients get the AP as DNS; dnsmasq forwards to /etc/resolv.conf (eth0's servers first).
-rm -f /etc/dnsmasq.d/mnet-on-the-road.conf
-cat >/etc/dnsmasq.d/mnet-on-the-road.conf <<EOF
+rm -f /etc/dnsmasq.d/mnet-ap.conf
+cat >/etc/dnsmasq.d/mnet-ap.conf <<EOF
 interface=${BR}
 bind-dynamic
 dhcp-authoritative
