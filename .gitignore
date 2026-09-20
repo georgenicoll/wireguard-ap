@@ -1,0 +1,26 @@
+# External configuration and secrets (SSID, PSK, AP network, hostname, WireGuard keys, etc.)
+# These are supplied per-deployment and must never be committed.
+*.tfvars
+!*.example.tfvars
+*.auto.tfvars
+secrets/
+secrets.*
+*.pem
+*.key
+id_rsa*
+id_ed25519*
+*.env
+.env
+.env.*
+
+# OpenTofu/Terraform state and working files (may contain secrets in plain text)
+# .terraform.lock.hcl is intentionally NOT ignored - it pins provider versions
+# and should be committed (see wireguard-router).
+.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+crash.*.log
+
+# Editor/OS noise
+.DS_Store

@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+# Thin wrapper around tofu that injects the external config file, so that
+# day-to-day use is:
+#
+#   ./wga init
+#   ./wga plan
+#   ./wga apply
+#   ./wga output
+#   ./wga destroy
+#
+# Configuration:
+#   WGA_CONFIG     path to your private wireguard-ap.tfvars file (required for
+#                  plan/apply/destroy/refresh/import/console) - see
+#                  wireguard-ap.example.tfvars.
+#   WGA_STATE_DIR  optional directory to keep state in, instead of this repo.
+#                  State contains the Wi-Fi PSK, so a private, backed-up
+#                  location is sensible.
+set -euo pipefail
+
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+usage() {
+    cat >&2 <<USAGE
+Usage: ./wga <tofu-command> [args...]
+
+Examples:
+  ./wga init
+  ./wga plan
+  ./wga apply
+  ./wga output -raw ssh_hint
+  ./wga destroy
+USAGE
+    exit 2
+}
+
+[[ $# -lt 1 ]] && usage
+
+COMMAND="$1"; shift
+
+command -v tofu >/dev/null 2>&1 || {
+    echo "error: 'tofu' is not on PATH. See https://opentofu.org/docs/intro/install/" >&2
+    exit 1
+}
+
+ARGS=()
+
+# Commands that consume variables need the external config file.
+case "$COMMAND" in
+plan | apply | destroy | refresh | import | console)
+    if [[ -z "${WGA_CONFIG:-}" ]]; then
+        cat >&2 <<MSG
+error: WGA_CONFIG is not set.
+
+Point it at your private config file, for example:
+  cp wireguard-ap.example.tfvars ~/private/wireguard-ap.tfvars
+  export WGA_CONFIG=~/private/wireguard-ap.tfvars
+MSG
+        exit 1
+    fi
+    CONFIG_PATH="$(cd "$(dirname "$WGA_CONFIG")" && pwd)/$(basename "$WGA_CONFIG")"
+    if [[ ! -r "$CONFIG_PATH" ]]; then
+        echo "error: cannot read config file: $CONFIG_PATH" >&2
+        exit 1
+    fi
+    # Absolute, because -chdir changes how relative paths resolve.
+    ARGS+=("-var-file=$CONFIG_PATH")
+    ;;
+esac
+
+# Optional external state location.
+if [[ -n "${WGA_STATE_DIR:-}" ]]; then
+    mkdir -p "$WGA_STATE_DIR"
+    STATE_DIR_ABS="$(cd "$WGA_STATE_DIR" && pwd)"
+    case "$COMMAND" in
+    plan | apply | destroy | refresh | import | output | show | state | taint | untaint)
+        ARGS+=("-state=$STATE_DIR_ABS/wireguard-ap.tfstate")
+        ;;
+    esac
+fi
+
+set -x
+exec tofu -chdir="$REPO_DIR" "$COMMAND" "${ARGS[@]}" "$@"
