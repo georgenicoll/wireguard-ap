@@ -7,10 +7,12 @@ ENV_FILE="$(dirname "$SCRIPT")/wireguard-ap.env"
 # shellcheck source=/dev/null
 source "$ENV_FILE"
 
-echo "net.ipv4.ip_forward=1" | sudo tee /etc/sysctl.d/90-mnet-ap.conf >/dev/null
-sudo sysctl -w net.ipv4.ip_forward=1
+[[ $EUID -eq 0 ]] || exec sudo "$SCRIPT" "$@"
 
-sudo tee /etc/nftables-mnet-ap.conf >/dev/null <<EOF
+echo "net.ipv4.ip_forward=1" | tee /etc/sysctl.d/90-mnet-ap.conf >/dev/null
+sysctl -w net.ipv4.ip_forward=1
+
+tee /etc/nftables-mnet-ap.conf >/dev/null <<EOF
 add table ip mnet_ap
 delete table ip mnet_ap
 table ip mnet_ap {
@@ -21,7 +23,7 @@ table ip mnet_ap {
 }
 EOF
 
-sudo tee /etc/systemd/system/mnet-ap-nat.service >/dev/null <<'EOF'
+tee /etc/systemd/system/mnet-ap-nat.service >/dev/null <<'EOF'
 [Unit]
 Description=NAT for mnet-ap AP
 After=network-pre.target
@@ -37,5 +39,5 @@ ExecStop=/usr/sbin/nft delete table ip mnet_ap
 WantedBy=multi-user.target
 EOF
 
-sudo systemctl daemon-reload
-sudo systemctl enable --now mnet-ap-nat.service
+systemctl daemon-reload
+systemctl enable --now mnet-ap-nat.service

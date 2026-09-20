@@ -1,6 +1,7 @@
 locals {
   remote_dir = "/home/${var.pi_user}"
   scripts = [
+    "setup_host.sh",
     "setup_forwarding_and_nat.sh",
     "setup_ap.sh",
     "uplink_wifi.sh",
@@ -22,7 +23,10 @@ locals {
   # into the shared submodule, immediately below with no blank line -
   # matches the tight spacing of the rest of the banner.
   banner = "${file("${path.module}/ascii/monkeynuthead.txt")}${file("${path.module}/templates/AP.txt")}"
-  motd   = "${local.banner}\n\n${file("${path.module}/templates/motd.txt")}"
+  # Printed only for pi_user's own interactive shells (via a ~/.bashrc
+  # snippet below), not system-wide via /etc/motd - other accounts on the
+  # Pi, if any, don't see it, and installing it needs no root at all.
+  motd = "${local.banner}\n\n${file("${path.module}/templates/motd.txt")}"
 
   env_file = templatefile("${path.module}/templates/wireguard-ap.env.tftpl", {
     pi_user    = var.pi_user
@@ -80,6 +84,11 @@ resource "terraform_data" "ap_deploy" {
   }
 
   provisioner "file" {
+    source      = "${path.module}/scripts/setup_host.sh"
+    destination = "${local.remote_dir}/setup_host.sh"
+  }
+
+  provisioner "file" {
     source      = "${path.module}/scripts/setup_forwarding_and_nat.sh"
     destination = "${local.remote_dir}/setup_forwarding_and_nat.sh"
   }
@@ -99,8 +108,6 @@ resource "terraform_data" "ap_deploy" {
     destination = "${local.remote_dir}/view_currently_associated_clients.sh"
   }
 
-  # Staged here and installed to /etc/motd below - the upload itself can't
-  # write there directly, since it runs as pi_user, not root.
   provisioner "file" {
     content     = local.motd
     destination = "${local.remote_dir}/.wireguard-ap-motd"
@@ -110,27 +117,20 @@ resource "terraform_data" "ap_deploy" {
     inline = [
       "chmod 600 ${local.remote_dir}/wireguard-ap.env",
       "chmod +x ${join(" ", [for f in local.scripts : "${local.remote_dir}/${f}"])}",
-      "sudo install -o root -g root -m 0644 ${local.remote_dir}/.wireguard-ap-motd /etc/motd",
-      "rm -f ${local.remote_dir}/.wireguard-ap-motd",
+      # Idempotent: only inserted once, guarded by the marker comment. Runs
+      # as pi_user, not root - printed for this account's own logins only,
+      # unlike a system-wide /etc/motd.
+      "grep -qF '# wireguard-ap motd' ${local.remote_dir}/.bashrc 2>/dev/null || cat >>${local.remote_dir}/.bashrc <<'EOF'\n\n# wireguard-ap motd\nif [[ $- == *i* && -f ~/.wireguard-ap-motd ]]; then cat ~/.wireguard-ap-motd; fi\nEOF",
     ]
   }
 
-  # One-time host setup (section 3 of the handoff doc). Idempotent: safe on
-  # every apply, including the first one.
+  # setup_host.sh, setup_forwarding_and_nat.sh and setup_ap.sh all
+  # self-elevate with sudo internally (no sudo prefix needed at the call
+  # site here), so sudoers can be scoped to just these script paths rather
+  # than granting NOPASSWD for everything - see README's sudoers section.
   provisioner "remote-exec" {
     inline = [
-      "sudo apt-get update -y",
-      "sudo apt-get install -y hostapd dnsmasq nftables iw",
-      "sudo systemctl disable --now hostapd 2>/dev/null || true",
-      "sudo systemctl enable dnsmasq",
-      "sudo systemctl enable --now ssh",
-      "sudo raspi-config nonint do_wifi_country ${var.reg_domain}",
-      "sudo rfkill unblock wlan",
-    ]
-  }
-
-  provisioner "remote-exec" {
-    inline = [
+      "${local.remote_dir}/setup_host.sh ${var.reg_domain}",
       "${local.remote_dir}/setup_forwarding_and_nat.sh",
       "${local.remote_dir}/setup_ap.sh ${var.mode} ${var.uplink_band}",
     ]
