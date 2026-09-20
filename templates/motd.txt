@@ -1,0 +1,9 @@
+wireguard-ap scripts (in ~, run without sudo - they escalate themselves where needed):
+
+  setup_ap.sh dual|uplink [5|2.4]        (Re)configure the AP. Safe to re-run, including to switch modes.
+  uplink_wifi.sh "SSID" ["password"]     Join an upstream Wi-Fi network on wlan0 (uplink mode only).
+  view_currently_associated_clients.sh   Show devices, routes, AP status and connected clients.
+  setup_forwarding_and_nat.sh            (Re)apply IP forwarding and NAT. Usually only needed once.
+
+Current settings: ~/wireguard-ap.env
+Full docs: https://github.com/georgenicoll/wireguard-ap

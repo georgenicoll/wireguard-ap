@@ -14,6 +14,12 @@ locals {
   dhcp_start = cidrhost(var.ap_net, 2)
   dhcp_end   = cidrhost(var.ap_net, -2)
 
+  # Banner art comes from the ascii submodule (github.com/georgenicoll/ascii)
+  # rather than a URL fetch, so it's available with no network access at
+  # plan/apply time - as long as `git submodule update --init` has been run
+  # once, which the README asks for.
+  motd = "${file("${path.module}/ascii/monkeynuthead.txt")}\n\n${file("${path.module}/templates/motd.txt")}"
+
   env_file = templatefile("${path.module}/templates/wireguard-ap.env.tftpl", {
     pi_user    = var.pi_user
     ssid       = var.ssid
@@ -48,6 +54,7 @@ resource "terraform_data" "ap_deploy" {
   triggers_replace = {
     env_file    = sha256(local.env_file)
     scripts     = sha256(join("", [for f in local.scripts : filesha256("${path.module}/scripts/${f}")]))
+    motd        = sha256(local.motd)
     mode        = var.mode
     uplink_band = var.uplink_band
   }
@@ -88,10 +95,19 @@ resource "terraform_data" "ap_deploy" {
     destination = "${local.remote_dir}/view_currently_associated_clients.sh"
   }
 
+  # Staged here and installed to /etc/motd below - the upload itself can't
+  # write there directly, since it runs as pi_user, not root.
+  provisioner "file" {
+    content     = local.motd
+    destination = "${local.remote_dir}/.wireguard-ap-motd"
+  }
+
   provisioner "remote-exec" {
     inline = [
       "chmod 600 ${local.remote_dir}/wireguard-ap.env",
       "chmod +x ${join(" ", [for f in local.scripts : "${local.remote_dir}/${f}"])}",
+      "sudo install -o root -g root -m 0644 ${local.remote_dir}/.wireguard-ap-motd /etc/motd",
+      "rm -f ${local.remote_dir}/.wireguard-ap-motd",
     ]
   }
 

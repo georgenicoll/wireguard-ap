@@ -22,11 +22,17 @@ the setup; `destroy` forgets that OpenTofu did so, without touching the Pi
 
 ## TL;DR: setting up your Pi
 
-**1. Install the tools.**
+**1. Install the tools, and fetch the ascii submodule.**
 
 ```bash
 tofu version   # https://opentofu.org/docs/intro/install/
+git submodule update --init
 ```
+
+This pulls in [ascii](https://github.com/georgenicoll/ascii) (the SSH login
+banner art) as a git submodule, so it's available locally with no network
+access needed at `apply` time. If you cloned with
+`git clone --recurse-submodules`, it's already there.
 
 **2. Prepare the Pi**, if you haven't already:
 
@@ -98,6 +104,7 @@ changing behaviour) and re-apply — see
 | --- | --- |
 | `main.tf` | One `terraform_data` resource: opens an SSH connection, uploads the 4 scripts and a rendered env file, then runs the one-time host setup and the AP setup scripts. |
 | `templates/wireguard-ap.env.tftpl` | Renders your config into a `KEY='value'` file the scripts `source` on the Pi, instead of having their settings hardcoded. |
+| `templates/motd.txt` + `ascii/monkeynuthead.txt` | Combined and installed as `/etc/motd` on the Pi: a banner (from the [ascii](https://github.com/georgenicoll/ascii) submodule) followed by a summary of the available scripts, shown on every SSH login. |
 | `scripts/*.sh` | The Pi-side scripts, uploaded byte-for-byte (not passed through `templatefile()`, since they use bash `${VAR}` inside heredocs that would collide with OpenTofu's own templating). Only `setup_ap.sh` and `setup_forwarding_and_nat.sh` were edited from the original handoff scripts, to `source` the env file instead of hardcoding SSID/PSK/network. |
 | `variables.tf` / `outputs.tf` / `versions.tf` | The input/output contract and provider requirement (`hashicorp/null` only — no cloud provider). |
 | `wga` | Thin wrapper around `tofu`, same idea as wireguard-router's `wgr`. |
@@ -183,6 +190,9 @@ that automatically.
   AP starts as soon as the USB adapter appears, even without eth0 or wlan0.
 - Re-running `setup_ap.sh` (directly, or via `./wga apply`) is always safe,
   including switching between modes.
+- **Login banner**: `/etc/motd` shows the available scripts and what each
+  does, so you don't need to remember or check this README from the Pi
+  itself.
 
 See `/mnt/c/Users/george/Dropbox/Network/wireguard/pi-ap-handoff.md` for the
 full hardware/design rationale and troubleshooting reference these scripts
@@ -205,6 +215,10 @@ were built from.
   key, wrong host, or unreachable Pi then fails fast with a clear error
   instead of `apply` sitting on `Provisioning with 'file'...` for minutes
   while it silently retries.
+- The `ascii` submodule is vendored (not fetched from a URL at apply time)
+  specifically so `apply` works without internet access, as long as
+  `git submodule update --init` has been run at least once. If you forget,
+  `apply` fails clearly (`ascii/monkeynuthead.txt`: no such file).
 
 ## Layout
 
@@ -213,6 +227,8 @@ wga                             driver script: ./wga <tofu command>
 wireguard-ap.example.tfvars     template for your private config file
 main.tf / variables.tf / outputs.tf / versions.tf
 templates/wireguard-ap.env.tftpl
+templates/motd.txt
+ascii/                          git submodule: github.com/georgenicoll/ascii
 scripts/setup_forwarding_and_nat.sh
 scripts/setup_ap.sh
 scripts/uplink_wifi.sh
