@@ -14,11 +14,15 @@ locals {
   dhcp_start = cidrhost(var.ap_net, 2)
   dhcp_end   = cidrhost(var.ap_net, -2)
 
-  # Banner art comes from the ascii submodule (github.com/georgenicoll/ascii)
-  # rather than a URL fetch, so it's available with no network access at
-  # plan/apply time - as long as `git submodule update --init` has been run
-  # once, which the README asks for.
-  motd = "${file("${path.module}/ascii/monkeynuthead.txt")}\n\n${file("${path.module}/templates/motd.txt")}"
+  # Banner art: the shared "monkeynuthead" part comes from the ascii
+  # submodule (github.com/georgenicoll/ascii) rather than a URL fetch, so
+  # it's available with no network access at plan/apply time - as long as
+  # `git submodule update --init` has been run once (wga does this itself).
+  # "AP" is specific to this project, so it stays local rather than going
+  # into the shared submodule, immediately below with no blank line -
+  # matches the tight spacing of the rest of the banner.
+  banner = "${file("${path.module}/ascii/monkeynuthead.txt")}${file("${path.module}/templates/AP.txt")}"
+  motd   = "${local.banner}\n\n${file("${path.module}/templates/motd.txt")}"
 
   env_file = templatefile("${path.module}/templates/wireguard-ap.env.tftpl", {
     pi_user    = var.pi_user

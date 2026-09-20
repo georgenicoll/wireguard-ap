@@ -42,6 +42,15 @@ command -v tofu >/dev/null 2>&1 || {
     exit 1
 }
 
+# The ascii submodule (login banner art) is read by main.tf's locals, so it's
+# needed for nearly every tofu command, not just apply. Auto-fetch it if it
+# hasn't been checked out yet, so nobody has to remember `git submodule
+# update --init` themselves.
+if [[ ! -s "$REPO_DIR/ascii/monkeynuthead.txt" ]]; then
+    echo "wga: fetching the ascii submodule..." >&2
+    git -C "$REPO_DIR" submodule update --init
+fi
+
 ARGS=()
 
 # Commands that consume variables need the external config file.
