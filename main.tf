@@ -1,6 +1,7 @@
 locals {
   remote_dir = "/home/${var.pi_user}"
   scripts = [
+    "setup_host.sh",
     "setup_forwarding_and_nat.sh",
     "setup_ap.sh",
     "uplink_wifi.sh",
@@ -13,6 +14,22 @@ locals {
   ap_ip      = cidrhost(var.ap_net, 1)
   dhcp_start = cidrhost(var.ap_net, 2)
   dhcp_end   = cidrhost(var.ap_net, -2)
+
+  # Banner art: the shared "monkeynuthead" part comes from the ascii
+  # submodule (github.com/georgenicoll/ascii) rather than a URL fetch, so
+  # it's available with no network access at plan/apply time - as long as
+  # `git submodule update --init` has been run once (wga does this itself).
+  # "AP" is specific to this project, so it stays local rather than going
+  # into the shared submodule, immediately below with no blank line -
+  # matches the tight spacing of the rest of the banner.
+  banner = "${file("${path.module}/ascii/monkeynuthead.txt")}${file("${path.module}/templates/AP.txt")}"
+  # Printed only for pi_user's own interactive shells (via a ~/.bashrc
+  # snippet below), not system-wide via /etc/motd - other accounts on the
+  # Pi, if any, don't see it, and installing it needs no root at all.
+  motd = "${local.banner}\n\n${templatefile("${path.module}/templates/motd.tftpl", {
+    ssid   = var.ssid
+    ap_net = var.ap_net
+  })}"
 
   env_file = templatefile("${path.module}/templates/wireguard-ap.env.tftpl", {
     pi_user    = var.pi_user
@@ -48,6 +65,7 @@ resource "terraform_data" "ap_deploy" {
   triggers_replace = {
     env_file    = sha256(local.env_file)
     scripts     = sha256(join("", [for f in local.scripts : filesha256("${path.module}/scripts/${f}")]))
+    motd        = sha256(local.motd)
     mode        = var.mode
     uplink_band = var.uplink_band
   }
@@ -66,6 +84,11 @@ resource "terraform_data" "ap_deploy" {
   provisioner "file" {
     content     = local.env_file
     destination = "${local.remote_dir}/wireguard-ap.env"
+  }
+
+  provisioner "file" {
+    source      = "${path.module}/scripts/setup_host.sh"
+    destination = "${local.remote_dir}/setup_host.sh"
   }
 
   provisioner "file" {
@@ -88,29 +111,29 @@ resource "terraform_data" "ap_deploy" {
     destination = "${local.remote_dir}/view_currently_associated_clients.sh"
   }
 
+  provisioner "file" {
+    content     = local.motd
+    destination = "${local.remote_dir}/.wireguard-ap-motd"
+  }
+
   provisioner "remote-exec" {
     inline = [
       "chmod 600 ${local.remote_dir}/wireguard-ap.env",
       "chmod +x ${join(" ", [for f in local.scripts : "${local.remote_dir}/${f}"])}",
+      # Idempotent: only inserted once, guarded by the marker comment. Runs
+      # as pi_user, not root - printed for this account's own logins only,
+      # unlike a system-wide /etc/motd.
+      "grep -qF '# wireguard-ap motd' ${local.remote_dir}/.bashrc 2>/dev/null || cat >>${local.remote_dir}/.bashrc <<'EOF'\n\n# wireguard-ap motd\nif [[ $- == *i* && -f ~/.wireguard-ap-motd ]]; then cat ~/.wireguard-ap-motd; fi\nEOF",
     ]
   }
 
-  # One-time host setup (section 3 of the handoff doc). Idempotent: safe on
-  # every apply, including the first one.
+  # setup_host.sh, setup_forwarding_and_nat.sh and setup_ap.sh all
+  # self-elevate with sudo internally (no sudo prefix needed at the call
+  # site here), so sudoers can be scoped to just these script paths rather
+  # than granting NOPASSWD for everything - see README's sudoers section.
   provisioner "remote-exec" {
     inline = [
-      "sudo apt-get update -y",
-      "sudo apt-get install -y hostapd dnsmasq nftables iw",
-      "sudo systemctl disable --now hostapd 2>/dev/null || true",
-      "sudo systemctl enable dnsmasq",
-      "sudo systemctl enable --now ssh",
-      "sudo raspi-config nonint do_wifi_country ${var.reg_domain}",
-      "sudo rfkill unblock wlan",
-    ]
-  }
-
-  provisioner "remote-exec" {
-    inline = [
+      "${local.remote_dir}/setup_host.sh ${var.reg_domain}",
       "${local.remote_dir}/setup_forwarding_and_nat.sh",
       "${local.remote_dir}/setup_ap.sh ${var.mode} ${var.uplink_band}",
     ]

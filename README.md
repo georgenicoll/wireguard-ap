@@ -28,12 +28,49 @@ the setup; `destroy` forgets that OpenTofu did so, without touching the Pi
 tofu version   # https://opentofu.org/docs/intro/install/
 ```
 
+The [ascii](https://github.com/georgenicoll/ascii) submodule (part of the
+login banner - see below) is fetched automatically the first time you run
+`./wga`, so no separate submodule step is needed when using it. Running
+`tofu` directly instead, skipping `wga`, does need one manual step first:
+`git submodule update --init` (or clone with `--recurse-submodules`).
+
 **2. Prepare the Pi**, if you haven't already:
 
 - Raspberry Pi OS (Bookworm-style), reachable over SSH on `eth0`.
-- A user (set via `pi_user`, no default) with **passwordless sudo** and your
-  **SSH public key** already authorized (`~/.ssh/authorized_keys` on the Pi)
-  — OpenTofu connects to an existing account, it doesn't create one.
+- A user (set via `pi_user`, no default) with **passwordless sudo for this
+  project's scripts** and your **SSH public key** already authorized
+  (`~/.ssh/authorized_keys` on the Pi) — OpenTofu connects to an existing
+  account, it doesn't create one.
+
+  Being in the `sudo` group is **not** enough on its own - that still
+  prompts for a password, which the SSH provisioner has no way to answer
+  (no TTY).
+
+  Confirm with `ssh <pi_user>@<pi_host> sudo -n true` (silent = fine, "a
+  password is required" = not set up yet).
+
+  If needed, grant `NOPASSWD` for just the scripts this project uploads and
+  self-elevates with `sudo` internally (`setup_host.sh`,
+  `setup_forwarding_and_nat.sh`, `setup_ap.sh`, `uplink_wifi.sh`), not root
+  access in general:
+  ```bash
+  PI_USER=changeme   # <-- OVERWRITE with your real pi_user before running this
+
+  cat <<EOF | sudo tee "/etc/sudoers.d/010-${PI_USER}-wireguard-ap"
+  ${PI_USER} ALL=(root) NOPASSWD: /home/${PI_USER}/setup_host.sh, /home/${PI_USER}/setup_forwarding_and_nat.sh, NOPASSWD:SETENV: /home/${PI_USER}/setup_ap.sh, NOPASSWD: /home/${PI_USER}/uplink_wifi.sh
+  EOF
+  sudo chmod 0440 "/etc/sudoers.d/010-${PI_USER}-wireguard-ap"
+  sudo visudo -c   # validates syntax - a bad sudoers file can lock out sudo entirely
+  ```
+  A bare script path with no arguments listed permits *any* arguments to
+  that script, so `dual`/`uplink`, the SSID/password, etc. all still work -
+  sudo just won't run anything *else* as root for this account. `setup_ap.sh`
+  additionally needs the `SETENV` tag: it re-execs itself as
+  `sudo --preserve-env=SSH_CONNECTION` so that, once elevated, it can still
+  tell whether the original SSH session came in over Wi-Fi (see its
+  comments) - without `SETENV`, sudo refuses to preserve that variable at
+  all, even though the script itself is otherwise permitted. The login
+  banner needs no root at all (see below), so it's not in this list.
 - The onboard radio (`wlan0`, driver `brcmfmac`) and, for dual-band or a
   5 GHz AP, a USB adapter that supports AP mode (`wlan1`, driver `mt7921u`
   in the reference setup).
@@ -96,9 +133,10 @@ changing behaviour) and re-apply — see
 
 | Path | Role |
 | --- | --- |
-| `main.tf` | One `terraform_data` resource: opens an SSH connection, uploads the 4 scripts and a rendered env file, then runs the one-time host setup and the AP setup scripts. |
+| `main.tf` | One `terraform_data` resource: opens an SSH connection, uploads the 5 scripts and a rendered env file, then runs the host setup and AP setup scripts. |
 | `templates/wireguard-ap.env.tftpl` | Renders your config into a `KEY='value'` file the scripts `source` on the Pi, instead of having their settings hardcoded. |
-| `scripts/*.sh` | The Pi-side scripts, uploaded byte-for-byte (not passed through `templatefile()`, since they use bash `${VAR}` inside heredocs that would collide with OpenTofu's own templating). Only `setup_ap.sh` and `setup_forwarding_and_nat.sh` were edited from the original handoff scripts, to `source` the env file instead of hardcoding SSID/PSK/network. |
+| `templates/motd.tftpl` + `ascii/monkeynuthead.txt` + `templates/AP.txt` | Combined into `~/.wireguard-ap-motd` and printed by a snippet appended to `pi_user`'s own `~/.bashrc` on every interactive login: the shared "monkey / nut / head" banner (from the [ascii](https://github.com/georgenicoll/ascii) submodule), "AP" underneath it in the same style but kept local to this repo since it's project-specific, then a summary of the available scripts plus the current SSID and subnet. Per-user rather than system-wide (`/etc/motd`), and needs no root at all. |
+| `scripts/*.sh` | The Pi-side scripts, uploaded byte-for-byte (not passed through `templatefile()`, since they use bash `${VAR}` inside heredocs that would collide with OpenTofu's own templating). `setup_host.sh` (packages, stock services, Wi-Fi country, radio unblock - the one-time-ish setup that used to be inline `sudo` commands in `main.tf`), `setup_ap.sh`, `setup_forwarding_and_nat.sh` and `uplink_wifi.sh` all self-elevate with `sudo` internally (`[[ $EUID -eq 0 ]] \|\| exec sudo "$SCRIPT" "$@"`) rather than being invoked with `sudo` at the call site, so sudoers can be scoped to exactly these script paths - see step 2 above. |
 | `variables.tf` / `outputs.tf` / `versions.tf` | The input/output contract and provider requirement (`hashicorp/null` only — no cloud provider). |
 | `wga` | Thin wrapper around `tofu`, same idea as wireguard-router's `wgr`. |
 
@@ -183,6 +221,9 @@ that automatically.
   AP starts as soon as the USB adapter appears, even without eth0 or wlan0.
 - Re-running `setup_ap.sh` (directly, or via `./wga apply`) is always safe,
   including switching between modes.
+- **Login banner**: `pi_user`'s interactive shells print the available
+  scripts and what each does (via `~/.bashrc`, not system-wide `/etc/motd`),
+  so you don't need to remember or check this README from the Pi itself.
 
 See `/mnt/c/Users/george/Dropbox/Network/wireguard/pi-ap-handoff.md` for the
 full hardware/design rationale and troubleshooting reference these scripts
@@ -205,6 +246,10 @@ were built from.
   key, wrong host, or unreachable Pi then fails fast with a clear error
   instead of `apply` sitting on `Provisioning with 'file'...` for minutes
   while it silently retries.
+- The `ascii` submodule is vendored (not fetched from a URL at apply time)
+  specifically so `apply` works without internet access, once it's been
+  fetched at least once - `wga` fetches it automatically if missing, so
+  this only matters if you're invoking `tofu` directly instead.
 
 ## Layout
 
@@ -213,6 +258,10 @@ wga                             driver script: ./wga <tofu command>
 wireguard-ap.example.tfvars     template for your private config file
 main.tf / variables.tf / outputs.tf / versions.tf
 templates/wireguard-ap.env.tftpl
+templates/motd.tftpl
+templates/AP.txt
+ascii/                          git submodule: github.com/georgenicoll/ascii (auto-fetched by wga)
+scripts/setup_host.sh
 scripts/setup_forwarding_and_nat.sh
 scripts/setup_ap.sh
 scripts/uplink_wifi.sh
