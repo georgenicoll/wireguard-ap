@@ -6,11 +6,13 @@
   <title>{{ ssid }} — login</title>
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
   <link rel="stylesheet" href="/static/pico.min.css">
+  <link rel="stylesheet" href="/static/site.css">
 </head>
 <body>
+  {% include "_header.html" %}
   <main>
     <hgroup>
-      <h1>{{ ssid }}</h1>
+      <h2>{{ ssid }}</h2>
       <p>Enter the Wi-Fi password to continue</p>
     </hgroup>
     {% if error %}<p style="color: var(--pico-del-color)">{{ error }}</p>{% endif %}

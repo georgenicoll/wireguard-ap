@@ -9,14 +9,16 @@
 #   "python-multipart",
 # ]
 # ///
+import asyncio
 import os
 import secrets
 import socket
 import subprocess
+import uuid
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from htpy import dd, dl, dt
@@ -70,7 +72,9 @@ def _local_ip() -> str:
 
 @app.get("/", response_class=HTMLResponse, dependencies=[Depends(require_login)])
 def index(request: Request):
-    return templates.TemplateResponse(request, "index.html", {"ssid": SSID})
+    return templates.TemplateResponse(
+        request, "index.html", {"ssid": SSID, "show_logout": True}
+    )
 
 
 @app.get(
@@ -105,6 +109,78 @@ def _run_script(name: str) -> str:
     return output
 
 
+# In-memory only, by design: this is a single-user local admin tool (one
+# process, no persistence needed), not a multi-tenant job queue. A job
+# started but never streamed (e.g. the tab was closed before the
+# EventSource opened) leaks its dict entry until the process exits, but
+# never runs longer than the underlying script does.
+_jobs: dict[str, asyncio.subprocess.Process] = {}
+
+
+async def _start_job(name: str, args: list[str]) -> str:
+    # Both setup_ap.sh and uplink_wifi.sh already self-elevate internally
+    # (sudo, NOPASSWD - see the README's sudoers section), same as
+    # _run_script above.
+    process = await asyncio.create_subprocess_exec(
+        str(SCRIPTS_DIR / name),
+        *args,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+    )
+    job_id = uuid.uuid4().hex
+    _jobs[job_id] = process
+    return job_id
+
+
+async def _stream_job(job_id: str):
+    process = _jobs.get(job_id)
+    if process is None or process.stdout is None:
+        yield "event: done\ndata: (no such job - already finished, or never started)\n\n"
+        return
+    while True:
+        line = await process.stdout.readline()
+        if not line:
+            break
+        yield f"data: {line.decode(errors='replace').rstrip(chr(10))}\n\n"
+    returncode = await process.wait()
+    yield f"data: \n\ndata: [exit code {returncode}]\n\n"
+    yield "event: done\ndata: \n\n"
+    _jobs.pop(job_id, None)
+
+
+@app.post("/run/setup_ap", dependencies=[Depends(require_login)])
+async def start_setup_ap(mode: str = Form(...), band: str = Form("5")):
+    if mode not in ("dual", "uplink"):
+        raise HTTPException(status_code=400, detail="invalid mode")
+    if band not in ("5", "2.4"):
+        raise HTTPException(status_code=400, detail="invalid band")
+    job_id = await _start_job("setup_ap.sh", [mode, band])
+    return {"job_id": job_id}
+
+
+@app.post("/run/uplink_wifi", dependencies=[Depends(require_login)])
+async def start_uplink_wifi(ssid: str = Form(...), password: str = Form("")):
+    if not ssid.strip():
+        raise HTTPException(status_code=400, detail="SSID required")
+    args = [ssid, password] if password else [ssid]
+    job_id = await _start_job("uplink_wifi.sh", args)
+    return {"job_id": job_id}
+
+
+@app.get("/run/stream/{job_id}", dependencies=[Depends(require_login)])
+async def stream_job(job_id: str):
+    return StreamingResponse(_stream_job(job_id), media_type="text/event-stream")
+
+
+@app.get(
+    "/manage", response_class=HTMLResponse, dependencies=[Depends(require_login)]
+)
+def manage(request: Request):
+    return templates.TemplateResponse(
+        request, "manage.html", {"ssid": SSID, "show_logout": True}
+    )
+
+
 @app.get(
     "/wireguard", response_class=HTMLResponse, dependencies=[Depends(require_login)]
 )
@@ -114,6 +190,7 @@ def wireguard_status(request: Request):
         "output.html",
         {
             "ssid": SSID,
+            "show_logout": True,
             "heading": "WireGuard status",
             "output": _run_script("view_wireguard_status.sh"),
         },
@@ -127,6 +204,7 @@ def clients(request: Request):
         "output.html",
         {
             "ssid": SSID,
+            "show_logout": True,
             "heading": "AP Status",
             "output": _run_script("view_currently_associated_clients.sh"),
         },

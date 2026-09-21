@@ -1,0 +1,8 @@
+<header>
+  <h1><a href="/">MonkeyNutHead AP</a></h1>
+  {% if show_logout %}
+  <form method="post" action="/logout">
+    <button type="submit" class="outline secondary logout">Log out</button>
+  </form>
+  {% endif %}
+</header>

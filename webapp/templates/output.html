@@ -6,12 +6,12 @@
   <title>{{ ssid }} — {{ heading }}</title>
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
   <link rel="stylesheet" href="/static/pico.min.css">
+  <link rel="stylesheet" href="/static/site.css">
 </head>
 <body>
-  <header>
-    <h1>{{ heading }}</h1>
-  </header>
+  {% include "_header.html" %}
   <main>
+    <h2>{{ heading }}</h2>
     <pre>{{ output }}</pre>
   </main>
   <footer>

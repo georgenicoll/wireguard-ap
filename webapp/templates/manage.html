@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ ssid }} — Manage AP</title>
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+  <link rel="stylesheet" href="/static/pico.min.css">
+  <link rel="stylesheet" href="/static/site.css">
+  <style>
+    pre.output { background: var(--pico-code-background-color); padding: 1rem; min-height: 3rem; max-height: 20rem; overflow-y: auto; white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  {% include "_header.html" %}
+  <main>
+    <h2>Manage AP</h2>
+    <article>
+      <h2>Configure AP mode</h2>
+      <form id="setup-ap-form">
+        <fieldset>
+          <legend>Mode</legend>
+          <label><input type="radio" name="mode" value="dual" checked> Dual (2.4 &amp; 5 GHz, both broadcasting this AP)</label>
+          <label><input type="radio" name="mode" value="uplink"> Uplink (one band is this AP, <code>wlan0</code> joins another network)</label>
+        </fieldset>
+        <label for="band">Uplink AP band (only used in uplink mode)</label>
+        <select id="band" name="band">
+          <option value="5" selected>5 GHz</option>
+          <option value="2.4">2.4 GHz</option>
+        </select>
+        <button type="button" id="setup-ap-btn"
+          onclick="runJob('setup-ap-form', '/run/setup_ap', 'setup-ap-output', 'setup-ap-btn')">
+          Run setup_ap.sh
+        </button>
+      </form>
+      <pre id="setup-ap-output" class="output"></pre>
+    </article>
+
+    <article>
+      <h2>Join upstream Wi-Fi</h2>
+      <p>Uplink mode only - has no effect until <code>wlan0</code> is free to act as a client (see above).</p>
+      <form id="uplink-form">
+        <label for="uplink-ssid">Uplink SSID</label>
+        <input type="text" id="uplink-ssid" name="ssid" required>
+        <label for="uplink-password">Uplink Password</label>
+        <input type="password" id="uplink-password" name="password" placeholder="leave blank for an open network">
+        <button type="button" id="uplink-btn"
+          onclick="runJob('uplink-form', '/run/uplink_wifi', 'uplink-output', 'uplink-btn')">
+          Run uplink_wifi.sh
+        </button>
+      </form>
+      <pre id="uplink-output" class="output"></pre>
+    </article>
+
+    <a href="/" role="button" class="outline secondary">&larr; Back</a>
+  </main>
+
+  <script>
+    async function runJob(formId, endpoint, outputId, buttonId) {
+      const output = document.getElementById(outputId);
+      const button = document.getElementById(buttonId);
+      const data = new FormData(document.getElementById(formId));
+      output.textContent = '';
+      button.disabled = true;
+      let es;
+      try {
+        const resp = await fetch(endpoint, { method: 'POST', body: data });
+        if (!resp.ok) {
+          output.textContent = 'Failed to start (HTTP ' + resp.status + ')';
+          button.disabled = false;
+          return;
+        }
+        const { job_id } = await resp.json();
+        es = new EventSource('/run/stream/' + job_id);
+        es.onmessage = (e) => {
+          output.textContent += e.data + '\n';
+          output.scrollTop = output.scrollHeight;
+        };
+        es.addEventListener('done', () => { es.close(); button.disabled = false; });
+        es.onerror = () => { es.close(); button.disabled = false; };
+      } catch (err) {
+        output.textContent = 'Error: ' + err;
+        if (es) es.close();
+        button.disabled = false;
+      }
+    }
+  </script>
+</body>
+</html>
