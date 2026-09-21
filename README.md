@@ -250,6 +250,19 @@ that automatically.
   only works end-to-end if this peer was registered on the wireguard-router
   side with `--lan <ap_net>`, so other peers know to route that subnet back
   here. Monitor with `sudo wg show all` on the Pi.
+
+  **Known, accepted risk**: if a peer's routed LAN (e.g. another site's
+  `--lan`) happens to be the same subnet as wherever the Pi is currently
+  plugged in/connected to over `eth0`/`wlan0`, that subnet's traffic gets
+  routed into the tunnel instead - which broke `eth0` access outright the
+  first time this happened (see git history on this file/`setup_wireguard.sh`
+  for the incident). This is a deliberate trade-off, not a bug to fix: the
+  alternative (dropping any locally-colliding route automatically) would
+  also silently drop *wanted* access to that peer's LAN whenever the
+  Pi's current network coincidentally shares its subnet, which defeats the
+  point of the tunnel more often than it protects against a collision - most
+  away networks aren't `10.0.0.0/24` (many default to `192.168.x.x`
+  instead). If it does collide, recover via the AP's own Wi-Fi (see Notes).
 - **DHCP/DNS**: `dnsmasq` on `br-ap`, range and netmask derived from `ap_net`;
   clients get the Pi as DNS, which forwards to the Pi's own resolver.
 - **Always reachable**: the bridge and hostapd units are hotplug-safe — the
@@ -295,6 +308,13 @@ were built from.
   never written to disk by this project (it does end up in OpenTofu state,
   same as `psk`) - editing wireguard-ap's own tfvars can't change it; that
   has to happen on the wireguard-router side (`scripts/wg-peer.sh update`).
+- **If `wg0` ever breaks `eth0` access** (a peer's routed LAN colliding with
+  wherever the Pi is currently connected - see the WireGuard section above),
+  the AP's own Wi-Fi (`ap_net`, default `10.1.1.0/24`) is on a separate
+  subnet and is unaffected: connect to the SSID and
+  `ssh <pi_user>@<ap_ip>` (the `ssh_hint` output) instead of `pi_host`, then
+  `sudo systemctl disable --now wg-quick@wg0` to remove the tunnel's routes
+  immediately.
 
 ## Layout
 
