@@ -7,6 +7,7 @@
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
   <link rel="stylesheet" href="/static/pico.min.css">
   <link rel="stylesheet" href="/static/site.css">
+  <script src="/static/htmx.min.js"></script>
 </head>
 <body>
   {% include "_header.html" %}
@@ -14,8 +15,12 @@
     <h2>{{ heading }}</h2>
     <pre>{{ output }}</pre>
   </main>
-  <footer>
+  <footer style="display: flex; gap: 0.75rem;">
     <a href="/" role="button" class="outline secondary">&larr; Back</a>
+    <button hx-get="{{ request.url.path }}" hx-select="pre" hx-target="pre" hx-swap="outerHTML"
+      hx-disabled-elt="this" class="outline secondary">
+      Refresh
+    </button>
   </footer>
 </body>
 </html>
