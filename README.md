@@ -227,7 +227,7 @@ record of having deployed there — there's no destroy-time provisioner, so
 `hostapd`, `dnsmasq`, the NAT rule, the bridge and the uploaded scripts are
 left exactly as they were. To actually disable the AP, SSH in and stop/disable
 the relevant units by hand (`mnet-hostapd@*`, `dnsmasq`, `mnet-ap-nat`,
-`mnet-ap-local-routing`), and remove
+`mnet-ap-local-routing`, `mnet-ap-wg-watchdog.timer`), and remove
 `/etc/NetworkManager/dispatcher.d/90-mnet-ap-wg-route-precedence` if you also
 want the `wg0` route-precedence fix gone, or ask for a destroy-time
 provisioner to be added if you want `destroy` to do that automatically.
@@ -252,6 +252,20 @@ provisioner to be added if you want `destroy` to do that automatically.
   only works end-to-end if this peer was registered on the wireguard-router
   side with `--lan <ap_net>`, so other peers know to route that subnet back
   here. Monitor with `sudo wg show all` on the Pi.
+
+  **Endpoint watchdog**: wireguard-router's own address usually comes from
+  dynamic DNS (`dynu_hostname`), which can change - but `wg-quick` only
+  resolves `Endpoint` once, at startup, so the tunnel would otherwise keep
+  silently talking to a stale address until something re-resolves it.
+  `mnet-ap-wg-watchdog.sh`, run every minute by
+  `mnet-ap-wg-watchdog.timer`, is a port of OpenWRT's own
+  `wireguard_watchdog` (Jason A. Donenfeld / Aleksandr V. Piskunov,
+  GPL-2.0 - see `/usr/bin/wireguard_watchdog` on an OpenWRT router): once
+  `wg0`'s handshake has been stale for more than 150s, it re-resolves the
+  peer's hostname in place via `wg set wg0 peer <key> endpoint host:port` -
+  no interface restart, no route flap. (This is separate from
+  `mnet-ap-wg-route-precedence.sh`'s NetworkManager dispatcher hook, which
+  handles *this Pi's own* address changing, not the peer's.)
 
   **Known, accepted trade-off**: if a peer's routed LAN (e.g. another site's
   `--lan`) happens to be the same subnet as wherever the Pi is currently
