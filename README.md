@@ -250,6 +250,17 @@ that automatically.
   only works end-to-end if this peer was registered on the wireguard-router
   side with `--lan <ap_net>`, so other peers know to route that subnet back
   here. Monitor with `sudo wg show all` on the Pi.
+
+  **`setup_wireguard.sh` drops any `AllowedIPs` entry that overlaps a
+  subnet the Pi is already directly connected to**, before `wg0` comes up.
+  This is a roaming device - which peer's routed LAN (if any) collides with
+  wherever it's physically plugged in right now can't be known in advance.
+  Routing such a subnet via `wg0` anyway broke `eth0` connectivity outright
+  the first time this ran, when another peer's registered LAN happened to
+  match the Pi's own physical network. Anything dropped this way is already
+  reachable directly via its own interface (see `wireguard_nat = false` on
+  the wireguard-router side and the NAT masquerade rule above - neither
+  changes), so nothing is actually lost.
 - **DHCP/DNS**: `dnsmasq` on `br-ap`, range and netmask derived from `ap_net`;
   clients get the Pi as DNS, which forwards to the Pi's own resolver.
 - **Always reachable**: the bridge and hostapd units are hotplug-safe — the
@@ -295,6 +306,12 @@ were built from.
   never written to disk by this project (it does end up in OpenTofu state,
   same as `psk`) - editing wireguard-ap's own tfvars can't change it; that
   has to happen on the wireguard-router side (`scripts/wg-peer.sh update`).
+- **If `wg0` ever does break `eth0` access** (e.g. `setup_wireguard.sh`'s own
+  overlap check has a gap, or a future change removes it), the AP's own
+  Wi-Fi (`ap_net`, default `10.1.1.0/24`) is on a separate subnet and is
+  unaffected - connect to the SSID and `ssh <pi_user>@<ap_ip>` (the `ssh_hint`
+  output) instead of `pi_host`, then `sudo systemctl disable --now
+  wg-quick@wg0` to remove the tunnel's routes immediately.
 
 ## Layout
 
