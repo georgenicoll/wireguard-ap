@@ -98,3 +98,17 @@ variable "lease" {
   type        = string
   default     = "15m"
 }
+
+# --- WireGuard uplink to wireguard-router -----------------------------------
+
+variable "wireguard_client_name" {
+  description = "This Pi's peer name in wireguard-router's key store (e.g. \"mnet-on-the-road\"), used by wga to fetch its client config via wireguard-router's scripts/wg-peer.sh. See README for how wga locates that script."
+  type        = string
+}
+
+variable "wireguard_client_config" {
+  description = "Full WireGuard client config (wg-quick .conf format) for wireguard_client_name, as printed by wireguard-router's scripts/wg-peer.sh client <name>. Populated automatically by wga - not meant to be set by hand in tfvars, since it's fetched fresh each run rather than stored. Empty skips WireGuard setup entirely (e.g. when using tofu directly without wga)."
+  type        = string
+  sensitive   = true
+  default     = ""
+}

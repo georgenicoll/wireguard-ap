@@ -12,13 +12,63 @@ source "$ENV_FILE"
 echo "net.ipv4.ip_forward=1" | tee /etc/sysctl.d/90-mnet-ap.conf >/dev/null
 sysctl -w net.ipv4.ip_forward=1
 
+# === write everything first, then load it all at the end (in dependency ====
+# order) - writing config and reloading a service interleaved is how the
+# mnet_ap_route table below once went missing: mnet-ap-nat.service got
+# restarted while the file only had the NAT table on disk, and nothing
+# reloaded it again after the rest was appended.
+
+# wg0 is deliberately excluded: wireguard-router's mesh is set up site-to-
+# site (wireguard_nat = false there, and this Pi is registered with --lan
+# rather than just its own tunnel address), so traffic headed into the
+# tunnel keeps each AP client's real source address rather than all of them
+# collapsing into the Pi's own tunnel IP. Only the real internet uplink
+# (eth0/wlan0) gets masqueraded.
 tee /etc/nftables-mnet-ap.conf >/dev/null <<EOF
 add table ip mnet_ap
 delete table ip mnet_ap
 table ip mnet_ap {
   chain postrouting {
     type nat hook postrouting priority srcnat; policy accept;
-    ip saddr ${AP_NET} oifname != "${BR}" masquerade
+    ip saddr ${AP_NET} oifname != "${BR}" oifname != "wg0" masquerade
+  }
+}
+EOF
+
+# --- keep connections that arrive on eth0/br-ap replying via that same ------
+# interface, even if wireguard later adds a route for the same subnet.
+#
+# Scoped to the nft "input" hook only - connections terminating on the Pi
+# itself (SSH, etc), not "forward" - so it never touches AP Wi-Fi clients'
+# own traffic, which still resolves via the normal routing table and can
+# still be pulled onto wg0 by a colliding peer route (see README). And it's
+# keyed on *which interface a connection arrived on*, not on any peer's
+# subnet, so it protects management access generically against any current
+# or future peer registration without needing to know about peer LANs at
+# all - see the incident this addresses in the WireGuard section of the
+# README.
+#
+# Deliberately unconditional (no "ct state new" restriction): marking only
+# brand new connections would never protect one already open when this rule
+# is (re)loaded - e.g. the SSH session running this very apply, or any
+# session open from before wg0 last came up - since a mark only applies from
+# the point a matching packet is actually seen. Re-marking every inbound
+# packet on every run is cheap and covers that case too: the next inbound
+# packet of an already-established connection gets it (re-)tagged just the
+# same as a new one would.
+tee -a /etc/nftables-mnet-ap.conf >/dev/null <<EOF
+
+add table ip mnet_ap_route
+delete table ip mnet_ap_route
+table ip mnet_ap_route {
+  chain input {
+    type filter hook input priority mangle; policy accept;
+    iifname "eth0" ct mark set 0x1
+    iifname "${BR}" ct mark set 0x2
+  }
+  chain output {
+    type route hook output priority mangle; policy accept;
+    ct mark != 0x0 meta mark set ct mark
   }
 }
 EOF
@@ -33,11 +83,66 @@ Wants=network-pre.target
 Type=oneshot
 RemainAfterExit=yes
 ExecStart=/usr/sbin/nft -f /etc/nftables-mnet-ap.conf
-ExecStop=/usr/sbin/nft delete table ip mnet_ap
+ExecStop=/bin/sh -c '/usr/sbin/nft delete table ip mnet_ap 2>/dev/null; /usr/sbin/nft delete table ip mnet_ap_route 2>/dev/null; true'
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
+{
+  echo '#!/usr/bin/env bash'
+  echo '# Regenerates the per-interface routing tables the mnet_ap_route nft'
+  echo '# marks above send marked replies through. Safe to re-run.'
+  echo 'set -euo pipefail'
+  printf 'BR=%q\n' "$BR"
+  cat <<'SCRIPT'
+
+setup_table() {
+  local mark=$1 table=$2 dev=$3
+  ip rule del fwmark "$mark" table "$table" 2>/dev/null || true
+  ip route flush table "$table" 2>/dev/null || true
+  [[ -e /sys/class/net/$dev ]] || return 0
+  local gw
+  gw="$(ip route show default dev "$dev" 2>/dev/null | awk '{print $3; exit}')"
+  if [[ -n $gw ]]; then
+    ip route add default via "$gw" dev "$dev" table "$table"
+  else
+    ip route add default dev "$dev" table "$table"
+  fi
+  ip rule add fwmark "$mark" table "$table" priority 100
+}
+
+setup_table 0x1 101 eth0
+setup_table 0x2 102 "$BR"
+SCRIPT
+} | tee /usr/local/sbin/mnet-ap-local-routing.sh >/dev/null
+chmod 755 /usr/local/sbin/mnet-ap-local-routing.sh
+
+tee /etc/systemd/system/mnet-ap-local-routing.service >/dev/null <<'EOF'
+[Unit]
+Description=Per-interface reply routing for mnet-ap local connections
+After=network-online.target mnet-ap-nat.service
+Wants=network-online.target
+Requires=mnet-ap-nat.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/mnet-ap-local-routing.sh
+ExecStop=/bin/true
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# === now load everything, in dependency order ===============================
 systemctl daemon-reload
-systemctl enable --now mnet-ap-nat.service
+
+systemctl enable mnet-ap-nat.service
+# "enable --now" is a no-op if the unit is already active from a previous
+# apply, which would silently skip re-reading an updated
+# /etc/nftables-mnet-ap.conf - explicit restart instead, every time.
+systemctl restart mnet-ap-nat.service
+
+systemctl enable mnet-ap-local-routing.service
+systemctl restart mnet-ap-local-routing.service

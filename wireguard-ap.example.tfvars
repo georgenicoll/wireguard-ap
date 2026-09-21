@@ -34,3 +34,11 @@ lease  = "15m"
 
 # Joining an upstream Wi-Fi network in "uplink" mode isn't set here - SSH in
 # and run ~/uplink_wifi.sh "SSID" "password" once you know the network.
+
+# --- WireGuard uplink to wireguard-router -----------------------------------
+
+# This Pi's peer name in wireguard-router's key store. wga fetches its
+# client config automatically via wireguard-router's scripts/wg-peer.sh
+# (see WGR_REPO_DIR/WGR_CONFIG/WGR_KEYS in wga's own comments) - nothing
+# else to set here, and nothing is stored in this file.
+wireguard_client_name = "changeme"
