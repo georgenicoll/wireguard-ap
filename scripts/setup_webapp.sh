@@ -23,6 +23,19 @@ APP_DIR="$(dirname "$SCRIPT")/webapp"
 # setup), but uv's own package cache then covers re-runs without it.
 command -v uv >/dev/null || curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh
 
+# Self-signed - there's no real hostname for the Pi to get a CA-signed cert
+# for. Browsers will warn once; that's expected for a local device like
+# this. Generated once and left alone on later runs, so it survives
+# redeploys and the browser doesn't need re-trusting every time app.py
+# changes.
+CERT="${APP_DIR}/cert.pem"
+KEY="${APP_DIR}/key.pem"
+if [[ ! -f $CERT || ! -f $KEY ]]; then
+  sudo -u "${PI_USER}" openssl req -x509 -newkey rsa:2048 -nodes \
+    -keyout "$KEY" -out "$CERT" -days 3650 \
+    -subj "/CN=${AP_IP}" -addext "subjectAltName=IP:${AP_IP}"
+fi
+
 tee /etc/systemd/system/mnet-ap-webapp.service >/dev/null <<EOF
 [Unit]
 Description=mnet-ap web UI
@@ -32,6 +45,7 @@ After=network.target
 Type=simple
 User=${PI_USER}
 WorkingDirectory=${APP_DIR}
+EnvironmentFile=${ENV_FILE}
 ExecStart=/usr/local/bin/uv run app.py
 Restart=on-failure
 

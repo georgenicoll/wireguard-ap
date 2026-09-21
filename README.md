@@ -52,12 +52,12 @@ login banner - see below) is fetched automatically the first time you run
   If needed, grant `NOPASSWD` for just the scripts this project uploads and
   self-elevates with `sudo` internally (`setup_host.sh`,
   `setup_wireguard.sh`, `setup_forwarding_and_nat.sh`, `setup_ap.sh`,
-  `uplink_wifi.sh`), not root access in general:
+  `uplink_wifi.sh`, `setup_webapp.sh`), not root access in general:
   ```bash
   PI_USER=changeme   # <-- OVERWRITE with your real pi_user before running this
 
   cat <<EOF | sudo tee "/etc/sudoers.d/010-${PI_USER}-wireguard-ap"
-  ${PI_USER} ALL=(root) NOPASSWD: /home/${PI_USER}/setup_host.sh, /home/${PI_USER}/setup_wireguard.sh, /home/${PI_USER}/setup_forwarding_and_nat.sh, NOPASSWD:SETENV: /home/${PI_USER}/setup_ap.sh, NOPASSWD: /home/${PI_USER}/uplink_wifi.sh
+  ${PI_USER} ALL=(root) NOPASSWD: /home/${PI_USER}/setup_host.sh, /home/${PI_USER}/setup_wireguard.sh, /home/${PI_USER}/setup_forwarding_and_nat.sh, NOPASSWD:SETENV: /home/${PI_USER}/setup_ap.sh, NOPASSWD: /home/${PI_USER}/uplink_wifi.sh, NOPASSWD: /home/${PI_USER}/setup_webapp.sh
   EOF
   sudo chmod 0440 "/etc/sudoers.d/010-${PI_USER}-wireguard-ap"
   sudo visudo -c   # validates syntax - a bad sudoers file can lock out sudo entirely
@@ -319,10 +319,12 @@ were built from.
 
 A small FastAPI + [htmx](https://htmx.org) app, currently just a starting
 point: the main page shows the Pi's hostname and IP address, fetched via
-htmx from `/api/hostinfo` rather than baked into the initial HTML.
+htmx from `/api/hostinfo` rather than baked into the initial HTML. HTML
+fragments are built with [htpy](https://htpy.dev) rather than f-strings, so
+values are escaped automatically.
 
 ```
-http://<pi_host>:8000/       # or http://<ap_ip>:8000/ once joined to the AP
+https://<pi_host>:8000/       # or https://<ap_ip>:8000/ once joined to the AP
 ```
 
 - **`setup_webapp.sh`** installs [uv](https://docs.astral.sh/uv/) system-wide
@@ -334,9 +336,24 @@ http://<pi_host>:8000/       # or http://<ap_ip>:8000/ once joined to the AP
   `# /// script ... ///` block at the top), and `uv run` resolves and caches
   an environment for them on the fly - editing that block is the only thing
   needed to add a dependency.
-- Runs as `pi_user`, not root, on `0.0.0.0:8000` - reachable from `eth0`,
-  the AP's own Wi-Fi, and `wg0` alike. No auth yet; treat it as trusted-network-only
-  for now.
+- Runs as `pi_user`, not root, on `0.0.0.0:8000` - reachable from `eth0`, the
+  AP's own Wi-Fi, and `wg0` alike.
+- **HTTPS, self-signed**: `setup_webapp.sh` generates `webapp/cert.pem` /
+  `webapp/key.pem` with `openssl` the first time it runs (left alone on
+  later runs, so redeploys don't force the browser to re-trust it). There's
+  no real hostname to get a CA-signed cert for, so your browser will warn
+  once - expected for a device like this, not a bug.
+- **Login-gated**: every page except `/login` requires a password, checked
+  against the AP's own Wi-Fi password (`PSK`) - one shared secret rather
+  than a separate site password to remember. A signed session cookie
+  (`itsdangerous`, `secure`-flagged since the site is HTTPS-only) persists
+  the login; its signing key (`webapp/.session_secret`) is generated once
+  on first run and kept, so a redeploy doesn't log everyone out.
+- **SSID-branded, not hardcoded**: the page title/heading show the AP's
+  actual configured SSID rather than a fixed name. `SSID` and `PSK` reach
+  the app via `EnvironmentFile=` in `mnet-ap-webapp.service`, pointing at
+  the same `wireguard-ap.env` the shell scripts already source - no
+  separate config to maintain.
 - **htmx is vendored** (`webapp/static/htmx.min.js`), not pulled from a CDN,
   for the same reason as the `ascii` banner submodule: this AP may have no
   internet uplink at all (e.g. `dual` mode, or before `uplink_wifi.sh` has
@@ -404,6 +421,7 @@ scripts/view_currently_associated_clients.sh
 scripts/setup_webapp.sh
 webapp/app.py
 webapp/templates/index.html
+webapp/templates/login.html
 webapp/static/htmx.min.js       vendored, not CDN-loaded - see "Web UI"
 webapp/static/favicon.svg
 ```

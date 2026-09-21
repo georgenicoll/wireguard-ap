@@ -28,3 +28,7 @@ crash.*.log
 # Python
 __pycache__/
 *.pyc
+
+# webapp/ runtime artifacts generated on the Pi (or locally, if testing
+# with "uv run") - never meant to be committed.
+webapp/.session_secret

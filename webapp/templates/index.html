@@ -3,19 +3,24 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>mnet-ap</title>
+  <title>{{ ssid }}</title>
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
   <script src="/static/htmx.min.js"></script>
   <style>
     body { font-family: system-ui, sans-serif; max-width: 32rem; margin: 3rem auto; padding: 0 1rem; }
     dt { font-weight: 600; margin-top: 0.5rem; }
     dd { margin: 0; }
+    form.logout { margin-top: 2rem; }
+    form.logout button { background: none; border: none; color: #666; cursor: pointer; padding: 0; font-size: 0.9rem; }
   </style>
 </head>
 <body>
-  <h1>mnet-ap</h1>
+  <h1>{{ ssid }}</h1>
   <div hx-get="/api/hostinfo" hx-trigger="load">
     Loading&hellip;
   </div>
+  <form class="logout" method="post" action="/logout">
+    <button type="submit">Log out</button>
+  </form>
 </body>
 </html>
