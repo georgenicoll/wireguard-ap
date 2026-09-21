@@ -47,9 +47,13 @@ User=${PI_USER}
 WorkingDirectory=${APP_DIR}
 EnvironmentFile=${ENV_FILE}
 # Lets a non-root process bind port 443 (the default HTTPS port) without
-# needing to run this whole service as root just for that.
+# needing to run this whole service as root just for that. Deliberately
+# *not* also narrowing CapabilityBoundingSet to just this capability - that
+# restricts the whole process tree, not just this process, and broke sudo
+# in the subprocesses app.py shells out to (/wireguard, /clients): sudo
+# itself needs capabilities well beyond CAP_NET_BIND_SERVICE to change to
+# root, and a narrowed bounding set denies those to it too.
 AmbientCapabilities=CAP_NET_BIND_SERVICE
-CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 ExecStart=/usr/local/bin/uv run app.py
 Restart=on-failure
 
