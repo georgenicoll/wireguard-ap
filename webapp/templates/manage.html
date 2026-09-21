@@ -23,7 +23,7 @@
           <label><input type="radio" name="mode" value="dual" checked onchange="updateBandField()"> Dual (2.4 &amp; 5 GHz, both broadcasting this AP)</label>
           <label><input type="radio" name="mode" value="uplink" onchange="updateBandField()"> Uplink (one band is this AP, <code>wlan0</code> joins another network)</label>
         </fieldset>
-        <label for="band">AP band</label>
+        <label for="band">AP band (only used when using uplink mode)</label>
         <select id="band" name="band" disabled>
           <option value="5" selected>5 GHz</option>
           <option value="2.4">2.4 GHz</option>
