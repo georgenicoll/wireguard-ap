@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ ssid }}</title>
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+  <link rel="stylesheet" href="/static/pico.min.css">
+  <link rel="stylesheet" href="/static/site.css">
+  <script src="/static/htmx.min.js"></script>
+</head>
+<body>
+  {% include "_header.html" %}
+  <main>
+    <h2>{{ ssid }}</h2>
+    <div hx-get="/api/hostinfo" hx-trigger="load">
+      Loading&hellip;
+    </div>
+    <nav>
+      <ul>
+        <li><a href="/wireguard" role="button">WireGuard status</a></li>
+        <li><a href="/clients" role="button">AP Status</a></li>
+        <li><a href="/manage" role="button">Manage AP</a></li>
+      </ul>
+    </nav>
+  </main>
+</body>
+</html>

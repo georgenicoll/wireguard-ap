@@ -52,12 +52,13 @@ login banner - see below) is fetched automatically the first time you run
   If needed, grant `NOPASSWD` for just the scripts this project uploads and
   self-elevates with `sudo` internally (`setup_host.sh`,
   `setup_wireguard.sh`, `setup_forwarding_and_nat.sh`, `setup_ap.sh`,
-  `uplink_wifi.sh`), not root access in general:
+  `uplink_wifi.sh`, `setup_webapp.sh`, `view_currently_associated_clients.sh`,
+  `view_wireguard_status.sh`, `shutdown_pi.sh`), not root access in general:
   ```bash
   PI_USER=changeme   # <-- OVERWRITE with your real pi_user before running this
 
   cat <<EOF | sudo tee "/etc/sudoers.d/010-${PI_USER}-wireguard-ap"
-  ${PI_USER} ALL=(root) NOPASSWD: /home/${PI_USER}/setup_host.sh, /home/${PI_USER}/setup_wireguard.sh, /home/${PI_USER}/setup_forwarding_and_nat.sh, NOPASSWD:SETENV: /home/${PI_USER}/setup_ap.sh, NOPASSWD: /home/${PI_USER}/uplink_wifi.sh
+  ${PI_USER} ALL=(root) NOPASSWD: /home/${PI_USER}/setup_host.sh, /home/${PI_USER}/setup_wireguard.sh, /home/${PI_USER}/setup_forwarding_and_nat.sh, NOPASSWD:SETENV: /home/${PI_USER}/setup_ap.sh, NOPASSWD: /home/${PI_USER}/uplink_wifi.sh, NOPASSWD: /home/${PI_USER}/setup_webapp.sh, NOPASSWD: /home/${PI_USER}/view_currently_associated_clients.sh, NOPASSWD: /home/${PI_USER}/view_wireguard_status.sh, NOPASSWD: /home/${PI_USER}/shutdown_pi.sh
   EOF
   sudo chmod 0440 "/etc/sudoers.d/010-${PI_USER}-wireguard-ap"
   sudo visudo -c   # validates syntax - a bad sudoers file can lock out sudo entirely
@@ -150,10 +151,11 @@ changing behaviour) and re-apply — see
 
 | Path | Role |
 | --- | --- |
-| `main.tf` | One `terraform_data` resource: opens an SSH connection, uploads the 6 scripts and a rendered env file, then runs the host, WireGuard, forwarding and AP setup scripts. |
+| `main.tf` | One `terraform_data` resource: opens an SSH connection, uploads the scripts, the `webapp/` app and a rendered env file, then runs the host, WireGuard, forwarding, AP and web UI setup scripts. |
 | `templates/wireguard-ap.env.tftpl` | Renders your config into a `KEY='value'` file the scripts `source` on the Pi, instead of having their settings hardcoded. |
 | `templates/motd.tftpl` + `ascii/monkeynuthead.txt` + `templates/AP.txt` | Combined into `~/.wireguard-ap-motd` and printed by a snippet appended to `pi_user`'s own `~/.bashrc` on every interactive login: the shared "monkey / nut / head" banner (from the [ascii](https://github.com/georgenicoll/ascii) submodule), "AP" underneath it in the same style but kept local to this repo since it's project-specific, then a summary of the available scripts plus the current SSID and subnet. Per-user rather than system-wide (`/etc/motd`), and needs no root at all. |
-| `scripts/*.sh` | The Pi-side scripts, uploaded byte-for-byte (not passed through `templatefile()`, since they use bash `${VAR}` inside heredocs that would collide with OpenTofu's own templating). `setup_host.sh` (packages, stock services, Wi-Fi country, radio unblock - the one-time-ish setup that used to be inline `sudo` commands in `main.tf`), `setup_wireguard.sh`, `setup_ap.sh`, `setup_forwarding_and_nat.sh` and `uplink_wifi.sh` all self-elevate with `sudo` internally (`[[ $EUID -eq 0 ]] \|\| exec sudo "$SCRIPT" "$@"`) rather than being invoked with `sudo` at the call site, so sudoers can be scoped to exactly these script paths - see step 2 above. |
+| `scripts/*.sh` | The Pi-side scripts, uploaded byte-for-byte (not passed through `templatefile()`, since they use bash `${VAR}` inside heredocs that would collide with OpenTofu's own templating). `setup_host.sh` (packages, stock services, Wi-Fi country, radio unblock - the one-time-ish setup that used to be inline `sudo` commands in `main.tf`), `setup_wireguard.sh`, `setup_ap.sh`, `setup_forwarding_and_nat.sh`, `uplink_wifi.sh`, `setup_webapp.sh`, `view_currently_associated_clients.sh` and `view_wireguard_status.sh` all self-elevate with `sudo` internally (`[[ $EUID -eq 0 ]] \|\| exec sudo "$SCRIPT" "$@"`) rather than being invoked with `sudo` at the call site, so sudoers can be scoped to exactly these script paths - see step 2 above. The latter two are also run non-interactively by the web UI (see below), which is the other reason they self-elevate the whole script rather than sudo-prefixing individual commands: no TTY means no password prompt, so every sudo call needs its own NOPASSWD coverage otherwise. |
+| `webapp/` | A small FastAPI + [htmx](https://htmx.org) web UI (`app.py`, `templates/`, `static/`), uploaded as-is and run by `setup_webapp.sh` via [uv](https://docs.astral.sh/uv/) - see "Web UI" below. |
 | `variables.tf` / `outputs.tf` / `versions.tf` | The input/output contract and provider requirement (`hashicorp/null` only — no cloud provider). |
 | `wga` | Thin wrapper around `tofu`, same idea as wireguard-router's `wgr` - also fetches the WireGuard client config named by `wireguard_client_name` via wireguard-router's own `scripts/wg-peer.sh`. |
 
@@ -227,7 +229,8 @@ record of having deployed there — there's no destroy-time provisioner, so
 `hostapd`, `dnsmasq`, the NAT rule, the bridge and the uploaded scripts are
 left exactly as they were. To actually disable the AP, SSH in and stop/disable
 the relevant units by hand (`mnet-hostapd@*`, `dnsmasq`, `mnet-ap-nat`,
-`mnet-ap-local-routing`, `mnet-ap-wg-watchdog.timer`), and remove
+`mnet-ap-local-routing`, `mnet-ap-wg-watchdog.timer`, `mnet-ap-webapp`), and
+remove
 `/etc/NetworkManager/dispatcher.d/90-mnet-ap-wg-route-precedence` if you also
 want the `wg0` route-precedence fix gone, or ask for a destroy-time
 provisioner to be added if you want `destroy` to do that automatically.
@@ -306,12 +309,100 @@ provisioner to be added if you want `destroy` to do that automatically.
 - Re-running `setup_ap.sh` (directly, or via `./wga apply`) is always safe,
   including switching between modes.
 - **Login banner**: `pi_user`'s interactive shells print the available
-  scripts and what each does (via `~/.bashrc`, not system-wide `/etc/motd`),
-  so you don't need to remember or check this README from the Pi itself.
+  scripts and what each does, the SSID/subnet, and the web UI's URL (via
+  `~/.bashrc`, not system-wide `/etc/motd`), so you don't need to remember
+  or check this README from the Pi itself.
 
 See `/mnt/c/Users/george/Dropbox/Network/wireguard/pi-ap-handoff.md` for the
 full hardware/design rationale and troubleshooting reference these scripts
 were built from.
+
+## Web UI
+
+A small FastAPI + [htmx](https://htmx.org) app. The main page shows the Pi's
+hostname and IP address, fetched via htmx from `/api/hostinfo` rather than
+baked into the initial HTML, plus links to two status pages:
+
+- **`/wireguard`** — `wg0`'s peer status (endpoint, handshake, transfer,
+  allowed IPs), via `view_wireguard_status.sh` (`wg show wg0` - which hides
+  private/preshared keys by default, unlike `wg show wg0 dump`).
+- **`/clients`** — currently associated AP Wi-Fi clients and their IPs, via
+  the same `view_currently_associated_clients.sh` used from the CLI (see
+  "What gets configured on the Pi" below). Always runs it without `--ssh`
+  (SSH session details aren't exposed here).
+- **`/manage`** — runs `setup_ap.sh`/`uplink_wifi.sh` with parameters chosen
+  in the browser (mode, band, upstream SSID/password) and streams their
+  output live rather than just showing a final result, using htmx's
+  official [SSE extension](https://htmx.org/extensions/sse/)
+  (`webapp/static/htmx-ext-sse.js`, vendored) rather than hand-written
+  `fetch()`/`EventSource` JS: the form does a normal `hx-post`, whose
+  response is an HTML fragment (built with `htpy`, escaping each streamed
+  line - it's swapped in via `innerHTML`, not treated as plain text like
+  before) wired with `hx-ext="sse" sse-connect="/run/stream/<job_id>"` -
+  htmx notices the newly-swapped element's attributes and opens the stream
+  itself. The Wi-Fi password still never touches a URL or browser history
+  (POST body only; the job id in the stream URL carries no secret). Jobs
+  are tracked in a plain in-memory dict - deliberately: this is a
+  single-user local admin tool, not a job queue that needs to survive a
+  restart. Also has a "Danger zone" - a confirm-gated (Pico `<dialog>`, not
+  a bare `confirm()`) button that runs `shutdown_pi.sh`
+  (`systemctl poweroff`) via `hx-post="/shutdown"`, fired as a background
+  task so the HTTP response reaches the browser before the Pi actually goes
+  down.
+
+Both status pages just run the corresponding script and show its raw
+output in a `<pre>` block - a starting point, not a polished table, per
+"we'll iterate from there". HTML fragments (`/api/hostinfo`) are built with
+[htpy](https://htpy.dev) rather than f-strings, so values are escaped
+automatically; script output elsewhere renders through Jinja2's default
+auto-escaping instead, for the same reason.
+
+```
+https://<pi_host>/       # or https://<ap_ip>/ once joined to the AP - also linked from the login banner
+```
+
+- **`setup_webapp.sh`** installs [uv](https://docs.astral.sh/uv/) system-wide
+  (`/usr/local/bin`, so it's on `PATH` for both this script and the service
+  below, whichever user runs each), then runs `webapp/app.py` as
+  `mnet-ap-webapp.service` via `uv run app.py`. There's no `requirements.txt`
+  or venv to manage by hand: `app.py` declares its own dependencies with
+  [PEP 723](https://peps.python.org/pep-0723/) inline script metadata (the
+  `# /// script ... ///` block at the top), and `uv run` resolves and caches
+  an environment for them on the fly - editing that block is the only thing
+  needed to add a dependency.
+- Runs as `pi_user`, not root, on `0.0.0.0:443` - reachable from `eth0`, the
+  AP's own Wi-Fi, and `wg0` alike. Binding the default HTTPS port without
+  being root comes from `CAP_NET_BIND_SERVICE`, granted to just this
+  service via `AmbientCapabilities=`/`CapabilityBoundingSet=` in
+  `mnet-ap-webapp.service` - not from running as root.
+- **HTTPS, self-signed**: `setup_webapp.sh` generates `webapp/cert.pem` /
+  `webapp/key.pem` with `openssl` the first time it runs (left alone on
+  later runs, so redeploys don't force the browser to re-trust it). There's
+  no real hostname to get a CA-signed cert for, so your browser will warn
+  once - expected for a device like this, not a bug.
+- **Login-gated**: every page except `/login` requires a password, checked
+  against the AP's own Wi-Fi password (`PSK`) - one shared secret rather
+  than a separate site password to remember. A signed session cookie
+  (`itsdangerous`, `secure`-flagged since the site is HTTPS-only) persists
+  the login; its signing key (`webapp/.session_secret`) is generated once
+  on first run and kept, so a redeploy doesn't log everyone out.
+- **SSID-branded, not hardcoded**: the page title/heading show the AP's
+  actual configured SSID rather than a fixed name. `SSID` and `PSK` reach
+  the app via `EnvironmentFile=` in `mnet-ap-webapp.service`, pointing at
+  the same `wireguard-ap.env` the shell scripts already source - no
+  separate config to maintain.
+- **htmx is vendored** (`webapp/static/htmx.min.js`, `htmx-ext-sse.js`), not
+  pulled from a CDN, for the same reason as the `ascii` banner submodule:
+  this AP may have no internet uplink at all (e.g. `dual` mode, or before
+  `uplink_wifi.sh` has been run), and the page should still work. Pinned at
+  2.0.10 (npm's actual `latest`, not the `next`-tagged 4.0.0 tried
+  initially) specifically because the SSE extension needs htmx's classic
+  `defineExtension` API, which v4 replaced with `registerExtension` -
+  confirmed by grepping the vendored file rather than assuming.
+- `uv`'s own package cache means only the *first* run on a given Pi needs
+  internet access to resolve `app.py`'s dependencies - later re-runs (e.g.
+  after a reboot, or a redeploy that doesn't touch the dependency block)
+  don't.
 
 ## Notes
 
@@ -368,4 +459,18 @@ scripts/setup_forwarding_and_nat.sh
 scripts/setup_ap.sh
 scripts/uplink_wifi.sh
 scripts/view_currently_associated_clients.sh
+scripts/view_wireguard_status.sh
+scripts/setup_webapp.sh
+scripts/shutdown_pi.sh
+webapp/app.py
+webapp/templates/_header.html   shared by every page
+webapp/templates/index.html
+webapp/templates/login.html
+webapp/templates/output.html    shared by /wireguard and /clients
+webapp/templates/manage.html
+webapp/static/site.css
+webapp/static/pico.min.css      vendored, not CDN-loaded - see "Web UI"
+webapp/static/htmx.min.js       vendored, not CDN-loaded - see "Web UI"
+webapp/static/htmx-ext-sse.js   vendored, not CDN-loaded - see "Web UI"
+webapp/static/favicon.svg
 ```
