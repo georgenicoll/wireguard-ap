@@ -226,7 +226,8 @@ change.
 record of having deployed there — there's no destroy-time provisioner, so
 `hostapd`, `dnsmasq`, the NAT rule, the bridge and the uploaded scripts are
 left exactly as they were. To actually disable the AP, SSH in and stop/disable
-the relevant units by hand (`mnet-hostapd@*`, `dnsmasq`, `mnet-ap-nat`), or
+the relevant units by hand (`mnet-hostapd@*`, `dnsmasq`, `mnet-ap-nat`,
+`mnet-ap-local-routing`), or
 ask for a destroy-time provisioner to be added if you want `destroy` to do
 that automatically.
 
@@ -263,6 +264,20 @@ that automatically.
   point of the tunnel more often than it protects against a collision - most
   away networks aren't `10.0.0.0/24` (many default to `192.168.x.x`
   instead). If it does collide, recover via the AP's own Wi-Fi (see Notes).
+
+  **Management access is protected against this**, though: `setup_forwarding_and_nat.sh`
+  also sets up policy routing (a `mnet_ap_route` nftables table plus
+  `/usr/local/sbin/mnet-ap-local-routing.sh`) that pins replies for any
+  connection *terminating on the Pi itself* - SSH, mainly - to the interface
+  it arrived on (`eth0` or the AP's own `br-ap`), regardless of what route
+  `wg-quick` adds afterward for the same subnet. It's keyed on arrival
+  interface, not on any peer's registered subnet, so it protects management
+  access generically against any current or future peer collision without
+  needing to know about peer LANs at all. It does **not** cover AP Wi-Fi
+  clients' own traffic (deliberately scoped to nft's `input` hook, not
+  `forward`) - a client's packet to an address in a colliding subnet is
+  still resolved by the normal routing table and can still go either way,
+  same as before.
 - **DHCP/DNS**: `dnsmasq` on `br-ap`, range and netmask derived from `ap_net`;
   clients get the Pi as DNS, which forwards to the Pi's own resolver.
 - **Always reachable**: the bridge and hostapd units are hotplug-safe — the
