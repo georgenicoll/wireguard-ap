@@ -227,9 +227,10 @@ record of having deployed there — there's no destroy-time provisioner, so
 `hostapd`, `dnsmasq`, the NAT rule, the bridge and the uploaded scripts are
 left exactly as they were. To actually disable the AP, SSH in and stop/disable
 the relevant units by hand (`mnet-hostapd@*`, `dnsmasq`, `mnet-ap-nat`,
-`mnet-ap-local-routing`), or
-ask for a destroy-time provisioner to be added if you want `destroy` to do
-that automatically.
+`mnet-ap-local-routing`), and remove
+`/etc/NetworkManager/dispatcher.d/90-mnet-ap-wg-route-precedence` if you also
+want the `wg0` route-precedence fix gone, or ask for a destroy-time
+provisioner to be added if you want `destroy` to do that automatically.
 
 ## What gets configured on the Pi
 
@@ -252,32 +253,38 @@ that automatically.
   side with `--lan <ap_net>`, so other peers know to route that subnet back
   here. Monitor with `sudo wg show all` on the Pi.
 
-  **Known, accepted risk**: if a peer's routed LAN (e.g. another site's
+  **Known, accepted trade-off**: if a peer's routed LAN (e.g. another site's
   `--lan`) happens to be the same subnet as wherever the Pi is currently
-  plugged in/connected to over `eth0`/`wlan0`, that subnet's traffic gets
-  routed into the tunnel instead - which broke `eth0` access outright the
-  first time this happened (see git history on this file/`setup_wireguard.sh`
-  for the incident). This is a deliberate trade-off, not a bug to fix: the
-  alternative (dropping any locally-colliding route automatically) would
-  also silently drop *wanted* access to that peer's LAN whenever the
-  Pi's current network coincidentally shares its subnet, which defeats the
-  point of the tunnel more often than it protects against a collision - most
-  away networks aren't `10.0.0.0/24` (many default to `192.168.x.x`
-  instead). If it does collide, recover via the AP's own Wi-Fi (see Notes).
+  plugged in/connected to over `eth0`/`wlan0`, that's a genuine address-space
+  collision - the same destination address can validly mean two different
+  things (a device on that peer's real LAN, or a device on whatever network
+  the Pi is currently attached to). This can't be resolved from the
+  destination address alone, so a deliberate, fixed choice is made instead of
+  leaving it to chance (see git history on this file/`setup_wireguard.sh` for
+  the incident this was first found by, and the discussion around it):
 
-  **Management access is protected against this**, though: `setup_forwarding_and_nat.sh`
-  also sets up policy routing (a `mnet_ap_route` nftables table plus
-  `/usr/local/sbin/mnet-ap-local-routing.sh`) that pins replies for any
-  connection *terminating on the Pi itself* - SSH, mainly - to the interface
-  it arrived on (`eth0` or the AP's own `br-ap`), regardless of what route
-  `wg-quick` adds afterward for the same subnet. It's keyed on arrival
-  interface, not on any peer's registered subnet, so it protects management
-  access generically against any current or future peer collision without
-  needing to know about peer LANs at all. It does **not** cover AP Wi-Fi
-  clients' own traffic (deliberately scoped to nft's `input` hook, not
-  `forward`) - a client's packet to an address in a colliding subnet is
-  still resolved by the normal routing table and can still go either way,
-  same as before.
+  - **Connections into the Pi itself** (SSH, mainly) always keep replying via
+    the interface they arrived on, regardless of any colliding route -
+    `setup_forwarding_and_nat.sh` sets up policy routing for this (a
+    `mnet_ap_route` nftables table plus
+    `/usr/local/sbin/mnet-ap-local-routing.sh`), keyed on arrival interface
+    rather than on any peer's registered subnet, so it protects management
+    access generically against any current or future peer collision without
+    needing to know about peer LANs at all.
+  - **Everything else** - AP clients' own traffic, and any new connection the
+    Pi itself initiates - deliberately prefers `wg0`:
+    `mnet-ap-wg-route-precedence.sh` (run after `wg-quick up` and on every
+    NetworkManager event, to survive a DHCP renewal resetting things) forces
+    any `wg0` route to win over a colliding connected-interface route by
+    metric, rather than leaving the kernel to pick unpredictably. This means
+    if the Pi is at home and a peer's registered LAN happens to collide with
+    the real home subnet, AP clients (and the Pi itself) lose the ability to
+    reach that specific local subnet directly for as long as the collision
+    holds - reaching the peer is treated as more important than reaching a
+    same-numbered local network. If it ever gets in the way, recover via the
+    AP's own Wi-Fi (see Notes) - unaffected either way, since `ap_net` is a
+    separate, non-colliding subnet, and management access is never at risk
+    of this regardless (see above).
 - **DHCP/DNS**: `dnsmasq` on `br-ap`, range and netmask derived from `ap_net`;
   clients get the Pi as DNS, which forwards to the Pi's own resolver.
 - **Always reachable**: the bridge and hostapd units are hotplug-safe — the
