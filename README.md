@@ -124,7 +124,7 @@ the same shell, these are likely set already.
 **5. Verify.**
 
 ```bash
-ssh <pi_user>@<pi_host> '~/view_currently_associated_clients.sh'
+ssh <pi_user>@<pi_host> '~/view_currently_associated_clients.sh'      # add --ssh to also list SSH sessions
 ```
 
 Or from your own device: join the SSID, then `ssh <pi_user>@<ap_ip>` (default
