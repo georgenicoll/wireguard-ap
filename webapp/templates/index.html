@@ -7,10 +7,28 @@
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
   <link rel="stylesheet" href="/static/pico.min.css">
   <script src="/static/htmx.min.js"></script>
+  <style>
+    header { display: flex; align-items: center; justify-content: space-between; }
+    header form { margin: 0; }
+    /* Reuses Pico's own "delete" color token (also used for the login
+       error message) rather than a hardcoded color, so it stays
+       consistent with Pico's theme, light/dark mode included. */
+    .logout {
+      --pico-secondary: var(--pico-del-color);
+      --pico-secondary-background: transparent;
+      --pico-secondary-border: var(--pico-del-color);
+      --pico-secondary-hover: var(--pico-del-color);
+      --pico-secondary-hover-background: var(--pico-del-color);
+      --pico-secondary-focus: var(--pico-del-color);
+    }
+  </style>
 </head>
 <body>
   <header>
     <h1>{{ ssid }}</h1>
+    <form method="post" action="/logout">
+      <button type="submit" class="outline secondary logout">Log out</button>
+    </form>
   </header>
   <main>
     <div hx-get="/api/hostinfo" hx-trigger="load">
@@ -19,14 +37,9 @@
     <nav>
       <ul>
         <li><a href="/wireguard" role="button">WireGuard status</a></li>
-        <li><a href="/clients" role="button">Connected clients</a></li>
+        <li><a href="/clients" role="button">AP Status</a></li>
       </ul>
     </nav>
   </main>
-  <footer>
-    <form method="post" action="/logout">
-      <button type="submit" class="outline secondary">Log out</button>
-    </form>
-  </footer>
 </body>
 </html>

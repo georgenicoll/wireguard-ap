@@ -309,8 +309,9 @@ provisioner to be added if you want `destroy` to do that automatically.
 - Re-running `setup_ap.sh` (directly, or via `./wga apply`) is always safe,
   including switching between modes.
 - **Login banner**: `pi_user`'s interactive shells print the available
-  scripts and what each does (via `~/.bashrc`, not system-wide `/etc/motd`),
-  so you don't need to remember or check this README from the Pi itself.
+  scripts and what each does, the SSID/subnet, and the web UI's URL (via
+  `~/.bashrc`, not system-wide `/etc/motd`), so you don't need to remember
+  or check this README from the Pi itself.
 
 See `/mnt/c/Users/george/Dropbox/Network/wireguard/pi-ap-handoff.md` for the
 full hardware/design rationale and troubleshooting reference these scripts
@@ -338,7 +339,7 @@ automatically; the two status pages render script output through Jinja2's
 default auto-escaping instead, for the same reason.
 
 ```
-https://<pi_host>:8000/       # or https://<ap_ip>:8000/ once joined to the AP
+https://<pi_host>/       # or https://<ap_ip>/ once joined to the AP - also linked from the login banner
 ```
 
 - **`setup_webapp.sh`** installs [uv](https://docs.astral.sh/uv/) system-wide
@@ -350,8 +351,11 @@ https://<pi_host>:8000/       # or https://<ap_ip>:8000/ once joined to the AP
   `# /// script ... ///` block at the top), and `uv run` resolves and caches
   an environment for them on the fly - editing that block is the only thing
   needed to add a dependency.
-- Runs as `pi_user`, not root, on `0.0.0.0:8000` - reachable from `eth0`, the
-  AP's own Wi-Fi, and `wg0` alike.
+- Runs as `pi_user`, not root, on `0.0.0.0:443` - reachable from `eth0`, the
+  AP's own Wi-Fi, and `wg0` alike. Binding the default HTTPS port without
+  being root comes from `CAP_NET_BIND_SERVICE`, granted to just this
+  service via `AmbientCapabilities=`/`CapabilityBoundingSet=` in
+  `mnet-ap-webapp.service` - not from running as root.
 - **HTTPS, self-signed**: `setup_webapp.sh` generates `webapp/cert.pem` /
   `webapp/key.pem` with `openssl` the first time it runs (left alone on
   later runs, so redeploys don't force the browser to re-trust it). There's

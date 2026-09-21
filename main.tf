@@ -36,6 +36,7 @@ locals {
   motd = "${local.banner}\n\n${templatefile("${path.module}/templates/motd.tftpl", {
     ssid   = var.ssid
     ap_net = var.ap_net
+    ap_ip  = local.ap_ip
   })}"
 
   # Strips any "DNS = ..." line: wg-quick would try to manage the Pi's own

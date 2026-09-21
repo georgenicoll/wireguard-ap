@@ -46,6 +46,10 @@ Type=simple
 User=${PI_USER}
 WorkingDirectory=${APP_DIR}
 EnvironmentFile=${ENV_FILE}
+# Lets a non-root process bind port 443 (the default HTTPS port) without
+# needing to run this whole service as root just for that.
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 ExecStart=/usr/local/bin/uv run app.py
 Restart=on-failure
 

@@ -127,7 +127,7 @@ def clients(request: Request):
         "output.html",
         {
             "ssid": SSID,
-            "heading": "Connected clients",
+            "heading": "AP Status",
             "output": _run_script("view_currently_associated_clients.sh"),
         },
     )
@@ -163,7 +163,11 @@ if __name__ == "__main__":
     uvicorn.run(
         app,
         host="0.0.0.0",
-        port=8000,
+        # 443, the default HTTPS port - not privileged for this process
+        # despite running as pi_user, not root: mnet-ap-webapp.service
+        # grants just CAP_NET_BIND_SERVICE (see setup_webapp.sh), rather
+        # than needing to run as root for this alone.
+        port=443,
         ssl_certfile=str(BASE_DIR / "cert.pem"),
         ssl_keyfile=str(BASE_DIR / "key.pem"),
     )
