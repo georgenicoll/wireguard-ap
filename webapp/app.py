@@ -12,6 +12,7 @@
 import os
 import secrets
 import socket
+import subprocess
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Request
@@ -22,6 +23,9 @@ from htpy import dd, dl, dt
 from starlette.middleware.sessions import SessionMiddleware
 
 BASE_DIR = Path(__file__).resolve().parent
+# Where the setup scripts live - one level up, alongside webapp/ itself
+# (see main.tf's remote_dir).
+SCRIPTS_DIR = BASE_DIR.parent
 
 # Both sourced from wireguard-ap.env (EnvironmentFile= in the systemd unit -
 # see setup_webapp.sh), the same file the shell scripts use, rather than
@@ -80,6 +84,52 @@ def hostinfo():
             dt["IP address"],
             dd[_local_ip()],
         ]
+    )
+
+
+def _run_script(name: str) -> str:
+    # Both scripts self-elevate internally (sudo, NOPASSWD - see the
+    # README's sudoers section) rather than being invoked with sudo here.
+    try:
+        result = subprocess.run(
+            [str(SCRIPTS_DIR / name)],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return f"Failed to run {name}: {e}"
+    output = result.stdout
+    if result.returncode != 0:
+        output += f"\n(exit code {result.returncode})\n{result.stderr}"
+    return output
+
+
+@app.get(
+    "/wireguard", response_class=HTMLResponse, dependencies=[Depends(require_login)]
+)
+def wireguard_status(request: Request):
+    return templates.TemplateResponse(
+        request,
+        "output.html",
+        {
+            "ssid": SSID,
+            "heading": "WireGuard status",
+            "output": _run_script("view_wireguard_status.sh"),
+        },
+    )
+
+
+@app.get("/clients", response_class=HTMLResponse, dependencies=[Depends(require_login)])
+def clients(request: Request):
+    return templates.TemplateResponse(
+        request,
+        "output.html",
+        {
+            "ssid": SSID,
+            "heading": "Connected clients",
+            "output": _run_script("view_currently_associated_clients.sh"),
+        },
     )
 
 

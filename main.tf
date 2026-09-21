@@ -7,6 +7,7 @@ locals {
     "setup_ap.sh",
     "uplink_wifi.sh",
     "view_currently_associated_clients.sh",
+    "view_wireguard_status.sh",
     "setup_webapp.sh",
   ]
 
@@ -141,6 +142,11 @@ resource "terraform_data" "ap_deploy" {
   provisioner "file" {
     source      = "${path.module}/scripts/view_currently_associated_clients.sh"
     destination = "${local.remote_dir}/view_currently_associated_clients.sh"
+  }
+
+  provisioner "file" {
+    source      = "${path.module}/scripts/view_wireguard_status.sh"
+    destination = "${local.remote_dir}/view_wireguard_status.sh"
   }
 
   provisioner "file" {

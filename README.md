@@ -52,12 +52,13 @@ login banner - see below) is fetched automatically the first time you run
   If needed, grant `NOPASSWD` for just the scripts this project uploads and
   self-elevates with `sudo` internally (`setup_host.sh`,
   `setup_wireguard.sh`, `setup_forwarding_and_nat.sh`, `setup_ap.sh`,
-  `uplink_wifi.sh`, `setup_webapp.sh`), not root access in general:
+  `uplink_wifi.sh`, `setup_webapp.sh`, `view_currently_associated_clients.sh`,
+  `view_wireguard_status.sh`), not root access in general:
   ```bash
   PI_USER=changeme   # <-- OVERWRITE with your real pi_user before running this
 
   cat <<EOF | sudo tee "/etc/sudoers.d/010-${PI_USER}-wireguard-ap"
-  ${PI_USER} ALL=(root) NOPASSWD: /home/${PI_USER}/setup_host.sh, /home/${PI_USER}/setup_wireguard.sh, /home/${PI_USER}/setup_forwarding_and_nat.sh, NOPASSWD:SETENV: /home/${PI_USER}/setup_ap.sh, NOPASSWD: /home/${PI_USER}/uplink_wifi.sh, NOPASSWD: /home/${PI_USER}/setup_webapp.sh
+  ${PI_USER} ALL=(root) NOPASSWD: /home/${PI_USER}/setup_host.sh, /home/${PI_USER}/setup_wireguard.sh, /home/${PI_USER}/setup_forwarding_and_nat.sh, NOPASSWD:SETENV: /home/${PI_USER}/setup_ap.sh, NOPASSWD: /home/${PI_USER}/uplink_wifi.sh, NOPASSWD: /home/${PI_USER}/setup_webapp.sh, NOPASSWD: /home/${PI_USER}/view_currently_associated_clients.sh, NOPASSWD: /home/${PI_USER}/view_wireguard_status.sh
   EOF
   sudo chmod 0440 "/etc/sudoers.d/010-${PI_USER}-wireguard-ap"
   sudo visudo -c   # validates syntax - a bad sudoers file can lock out sudo entirely
@@ -153,7 +154,7 @@ changing behaviour) and re-apply — see
 | `main.tf` | One `terraform_data` resource: opens an SSH connection, uploads the scripts, the `webapp/` app and a rendered env file, then runs the host, WireGuard, forwarding, AP and web UI setup scripts. |
 | `templates/wireguard-ap.env.tftpl` | Renders your config into a `KEY='value'` file the scripts `source` on the Pi, instead of having their settings hardcoded. |
 | `templates/motd.tftpl` + `ascii/monkeynuthead.txt` + `templates/AP.txt` | Combined into `~/.wireguard-ap-motd` and printed by a snippet appended to `pi_user`'s own `~/.bashrc` on every interactive login: the shared "monkey / nut / head" banner (from the [ascii](https://github.com/georgenicoll/ascii) submodule), "AP" underneath it in the same style but kept local to this repo since it's project-specific, then a summary of the available scripts plus the current SSID and subnet. Per-user rather than system-wide (`/etc/motd`), and needs no root at all. |
-| `scripts/*.sh` | The Pi-side scripts, uploaded byte-for-byte (not passed through `templatefile()`, since they use bash `${VAR}` inside heredocs that would collide with OpenTofu's own templating). `setup_host.sh` (packages, stock services, Wi-Fi country, radio unblock - the one-time-ish setup that used to be inline `sudo` commands in `main.tf`), `setup_wireguard.sh`, `setup_ap.sh`, `setup_forwarding_and_nat.sh`, `uplink_wifi.sh` and `setup_webapp.sh` all self-elevate with `sudo` internally (`[[ $EUID -eq 0 ]] \|\| exec sudo "$SCRIPT" "$@"`) rather than being invoked with `sudo` at the call site, so sudoers can be scoped to exactly these script paths - see step 2 above. |
+| `scripts/*.sh` | The Pi-side scripts, uploaded byte-for-byte (not passed through `templatefile()`, since they use bash `${VAR}` inside heredocs that would collide with OpenTofu's own templating). `setup_host.sh` (packages, stock services, Wi-Fi country, radio unblock - the one-time-ish setup that used to be inline `sudo` commands in `main.tf`), `setup_wireguard.sh`, `setup_ap.sh`, `setup_forwarding_and_nat.sh`, `uplink_wifi.sh`, `setup_webapp.sh`, `view_currently_associated_clients.sh` and `view_wireguard_status.sh` all self-elevate with `sudo` internally (`[[ $EUID -eq 0 ]] \|\| exec sudo "$SCRIPT" "$@"`) rather than being invoked with `sudo` at the call site, so sudoers can be scoped to exactly these script paths - see step 2 above. The latter two are also run non-interactively by the web UI (see below), which is the other reason they self-elevate the whole script rather than sudo-prefixing individual commands: no TTY means no password prompt, so every sudo call needs its own NOPASSWD coverage otherwise. |
 | `webapp/` | A small FastAPI + [htmx](https://htmx.org) web UI (`app.py`, `templates/`, `static/`), uploaded as-is and run by `setup_webapp.sh` via [uv](https://docs.astral.sh/uv/) - see "Web UI" below. |
 | `variables.tf` / `outputs.tf` / `versions.tf` | The input/output contract and provider requirement (`hashicorp/null` only — no cloud provider). |
 | `wga` | Thin wrapper around `tofu`, same idea as wireguard-router's `wgr` - also fetches the WireGuard client config named by `wireguard_client_name` via wireguard-router's own `scripts/wg-peer.sh`. |
@@ -317,11 +318,24 @@ were built from.
 
 ## Web UI
 
-A small FastAPI + [htmx](https://htmx.org) app, currently just a starting
-point: the main page shows the Pi's hostname and IP address, fetched via
-htmx from `/api/hostinfo` rather than baked into the initial HTML. HTML
-fragments are built with [htpy](https://htpy.dev) rather than f-strings, so
-values are escaped automatically.
+A small FastAPI + [htmx](https://htmx.org) app. The main page shows the Pi's
+hostname and IP address, fetched via htmx from `/api/hostinfo` rather than
+baked into the initial HTML, plus links to two status pages:
+
+- **`/wireguard`** — `wg0`'s peer status (endpoint, handshake, transfer,
+  allowed IPs), via `view_wireguard_status.sh` (`wg show wg0` - which hides
+  private/preshared keys by default, unlike `wg show wg0 dump`).
+- **`/clients`** — currently associated AP Wi-Fi clients and their IPs, via
+  the same `view_currently_associated_clients.sh` used from the CLI (see
+  "What gets configured on the Pi" below). Always runs it without `--ssh`
+  (SSH session details aren't exposed here).
+
+Both just run the corresponding script and show its raw output in a
+`<pre>` block - a starting point, not a polished table, per "we'll iterate
+from there". HTML fragments (`/api/hostinfo`) are built with
+[htpy](https://htpy.dev) rather than f-strings, so values are escaped
+automatically; the two status pages render script output through Jinja2's
+default auto-escaping instead, for the same reason.
 
 ```
 https://<pi_host>:8000/       # or https://<ap_ip>:8000/ once joined to the AP
@@ -418,10 +432,12 @@ scripts/setup_forwarding_and_nat.sh
 scripts/setup_ap.sh
 scripts/uplink_wifi.sh
 scripts/view_currently_associated_clients.sh
+scripts/view_wireguard_status.sh
 scripts/setup_webapp.sh
 webapp/app.py
 webapp/templates/index.html
 webapp/templates/login.html
+webapp/templates/output.html    shared by /wireguard and /clients
 webapp/static/htmx.min.js       vendored, not CDN-loaded - see "Web UI"
 webapp/static/favicon.svg
 ```
