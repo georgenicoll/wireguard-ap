@@ -20,11 +20,11 @@
       <form id="setup-ap-form">
         <fieldset>
           <legend>Mode</legend>
-          <label><input type="radio" name="mode" value="dual" checked> Dual (2.4 &amp; 5 GHz, both broadcasting this AP)</label>
-          <label><input type="radio" name="mode" value="uplink"> Uplink (one band is this AP, <code>wlan0</code> joins another network)</label>
+          <label><input type="radio" name="mode" value="dual" checked onchange="updateBandField()"> Dual (2.4 &amp; 5 GHz, both broadcasting this AP)</label>
+          <label><input type="radio" name="mode" value="uplink" onchange="updateBandField()"> Uplink (one band is this AP, <code>wlan0</code> joins another network)</label>
         </fieldset>
-        <label for="band">Uplink AP band (only used in uplink mode)</label>
-        <select id="band" name="band">
+        <label for="band">AP band</label>
+        <select id="band" name="band" disabled>
           <option value="5" selected>5 GHz</option>
           <option value="2.4">2.4 GHz</option>
         </select>
@@ -52,10 +52,58 @@
       <pre id="uplink-output" class="output"></pre>
     </article>
 
+    <article>
+      <h2>Danger zone</h2>
+      <p>Powers off the Pi immediately. You'll need physical access (or a
+        smart plug/remote power switch) to turn it back on.</p>
+      <button type="button" id="shutdown-btn" class="outline danger"
+        onclick="document.getElementById('shutdown-dialog').showModal()">
+        Shut down the Pi
+      </button>
+      <p id="shutdown-status"></p>
+    </article>
+
     <a href="/" role="button" class="outline secondary">&larr; Back</a>
   </main>
 
+  <dialog id="shutdown-dialog">
+    <article>
+      <h3>Shut down the Pi?</h3>
+      <p>You'll need physical access (or a smart plug/remote power switch)
+        to turn it back on.</p>
+      <footer>
+        <button class="secondary" onclick="document.getElementById('shutdown-dialog').close()">
+          Cancel
+        </button>
+        <button class="danger" onclick="confirmShutdown()">Shut down</button>
+      </footer>
+    </article>
+  </dialog>
+
   <script>
+    async function confirmShutdown() {
+      document.getElementById('shutdown-dialog').close();
+      const button = document.getElementById('shutdown-btn');
+      const status = document.getElementById('shutdown-status');
+      button.disabled = true;
+      try {
+        const resp = await fetch('/shutdown', { method: 'POST' });
+        status.textContent = resp.ok
+          ? 'Shutting down now - this page will stop responding shortly.'
+          : 'Failed to start shutdown (HTTP ' + resp.status + ')';
+      } catch (err) {
+        status.textContent = 'Shutting down now (connection dropped, as expected).';
+      }
+    }
+
+    function updateBandField() {
+      const mode = document.querySelector('input[name="mode"]:checked').value;
+      // Disabled fields are omitted from form submissions entirely, so
+      // dual mode correctly sends no "band" at all (the backend defaults
+      // it to 5, which dual mode ignores anyway).
+      document.getElementById('band').disabled = mode !== 'uplink';
+    }
+
     async function runJob(formId, endpoint, outputId, buttonId) {
       const output = document.getElementById(outputId);
       const button = document.getElementById(buttonId);

@@ -172,6 +172,19 @@ async def stream_job(job_id: str):
     return StreamingResponse(_stream_job(job_id), media_type="text/event-stream")
 
 
+@app.post("/shutdown", dependencies=[Depends(require_login)])
+async def shutdown_pi():
+    # Fire-and-forget: "systemctl poweroff" schedules the shutdown and
+    # returns, but not so fast that this response is guaranteed to reach
+    # the browser first if awaited directly - start it as a background
+    # task instead, so the HTTP response always goes out first.
+    async def _run():
+        await asyncio.create_subprocess_exec(str(SCRIPTS_DIR / "shutdown_pi.sh"))
+
+    asyncio.create_task(_run())
+    return {"status": "shutting down"}
+
+
 @app.get(
     "/manage", response_class=HTMLResponse, dependencies=[Depends(require_login)]
 )

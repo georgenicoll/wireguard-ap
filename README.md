@@ -53,12 +53,12 @@ login banner - see below) is fetched automatically the first time you run
   self-elevates with `sudo` internally (`setup_host.sh`,
   `setup_wireguard.sh`, `setup_forwarding_and_nat.sh`, `setup_ap.sh`,
   `uplink_wifi.sh`, `setup_webapp.sh`, `view_currently_associated_clients.sh`,
-  `view_wireguard_status.sh`), not root access in general:
+  `view_wireguard_status.sh`, `shutdown_pi.sh`), not root access in general:
   ```bash
   PI_USER=changeme   # <-- OVERWRITE with your real pi_user before running this
 
   cat <<EOF | sudo tee "/etc/sudoers.d/010-${PI_USER}-wireguard-ap"
-  ${PI_USER} ALL=(root) NOPASSWD: /home/${PI_USER}/setup_host.sh, /home/${PI_USER}/setup_wireguard.sh, /home/${PI_USER}/setup_forwarding_and_nat.sh, NOPASSWD:SETENV: /home/${PI_USER}/setup_ap.sh, NOPASSWD: /home/${PI_USER}/uplink_wifi.sh, NOPASSWD: /home/${PI_USER}/setup_webapp.sh, NOPASSWD: /home/${PI_USER}/view_currently_associated_clients.sh, NOPASSWD: /home/${PI_USER}/view_wireguard_status.sh
+  ${PI_USER} ALL=(root) NOPASSWD: /home/${PI_USER}/setup_host.sh, /home/${PI_USER}/setup_wireguard.sh, /home/${PI_USER}/setup_forwarding_and_nat.sh, NOPASSWD:SETENV: /home/${PI_USER}/setup_ap.sh, NOPASSWD: /home/${PI_USER}/uplink_wifi.sh, NOPASSWD: /home/${PI_USER}/setup_webapp.sh, NOPASSWD: /home/${PI_USER}/view_currently_associated_clients.sh, NOPASSWD: /home/${PI_USER}/view_wireguard_status.sh, NOPASSWD: /home/${PI_USER}/shutdown_pi.sh
   EOF
   sudo chmod 0440 "/etc/sudoers.d/010-${PI_USER}-wireguard-ap"
   sudo visudo -c   # validates syntax - a bad sudoers file can lock out sudo entirely
@@ -330,13 +330,26 @@ baked into the initial HTML, plus links to two status pages:
   the same `view_currently_associated_clients.sh` used from the CLI (see
   "What gets configured on the Pi" below). Always runs it without `--ssh`
   (SSH session details aren't exposed here).
+- **`/manage`** — runs `setup_ap.sh`/`uplink_wifi.sh` with parameters chosen
+  in the browser (mode, band, upstream SSID/password) and streams their
+  output live rather than just showing a final result: POST starts the
+  script as a background job and returns a `job_id` (never the Wi-Fi
+  password itself - that never touches a URL or browser history), then the
+  browser's native `EventSource` consumes a `GET /run/stream/<job_id>`
+  Server-Sent-Events endpoint. Jobs are tracked in a plain in-memory dict -
+  deliberately: this is a single-user local admin tool, not a job queue
+  that needs to survive a restart. Also has a "Danger zone" - a
+  confirm-gated (Pico `<dialog>`, not a bare `confirm()`) button that runs
+  `shutdown_pi.sh` (`systemctl poweroff`) via `POST /shutdown`, fired as a
+  background task so the HTTP response reaches the browser before the Pi
+  actually goes down.
 
-Both just run the corresponding script and show its raw output in a
-`<pre>` block - a starting point, not a polished table, per "we'll iterate
-from there". HTML fragments (`/api/hostinfo`) are built with
+Both status pages just run the corresponding script and show its raw
+output in a `<pre>` block - a starting point, not a polished table, per
+"we'll iterate from there". HTML fragments (`/api/hostinfo`) are built with
 [htpy](https://htpy.dev) rather than f-strings, so values are escaped
-automatically; the two status pages render script output through Jinja2's
-default auto-escaping instead, for the same reason.
+automatically; script output elsewhere renders through Jinja2's default
+auto-escaping instead, for the same reason.
 
 ```
 https://<pi_host>/       # or https://<ap_ip>/ once joined to the AP - also linked from the login banner
@@ -438,10 +451,15 @@ scripts/uplink_wifi.sh
 scripts/view_currently_associated_clients.sh
 scripts/view_wireguard_status.sh
 scripts/setup_webapp.sh
+scripts/shutdown_pi.sh
 webapp/app.py
+webapp/templates/_header.html   shared by every page
 webapp/templates/index.html
 webapp/templates/login.html
 webapp/templates/output.html    shared by /wireguard and /clients
+webapp/templates/manage.html
+webapp/static/site.css
+webapp/static/pico.min.css      vendored, not CDN-loaded - see "Web UI"
 webapp/static/htmx.min.js       vendored, not CDN-loaded - see "Web UI"
 webapp/static/favicon.svg
 ```

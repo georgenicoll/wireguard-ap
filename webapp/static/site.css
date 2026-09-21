@@ -1,14 +1,15 @@
 /* Shared across all pages (see templates/_header.html) - kept separate
    from pico.min.css (vendored, third-party) so it's obviously ours. */
-header { display: flex; align-items: center; justify-content: space-between; }
+header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem; }
 header h1 { margin: 0; }
 header h1 a { text-decoration: none; color: inherit; }
 header form { margin: 0; }
 
 /* Reuses Pico's own "delete" color token (also used for the login error
    message) rather than a hardcoded color, so it stays consistent with
-   Pico's theme, light/dark mode included. */
-.logout {
+   Pico's theme, light/dark mode included. Used for the logout button and
+   any other destructive/irreversible action (e.g. shutdown). */
+.danger {
   --pico-secondary: var(--pico-del-color);
   --pico-secondary-background: transparent;
   --pico-secondary-border: var(--pico-del-color);

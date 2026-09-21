@@ -9,6 +9,7 @@ locals {
     "view_currently_associated_clients.sh",
     "view_wireguard_status.sh",
     "setup_webapp.sh",
+    "shutdown_pi.sh",
   ]
 
   # Every file under webapp/ (app.py, templates/, static/), so a change to
@@ -153,6 +154,11 @@ resource "terraform_data" "ap_deploy" {
   provisioner "file" {
     source      = "${path.module}/scripts/setup_webapp.sh"
     destination = "${local.remote_dir}/setup_webapp.sh"
+  }
+
+  provisioner "file" {
+    source      = "${path.module}/scripts/shutdown_pi.sh"
+    destination = "${local.remote_dir}/shutdown_pi.sh"
   }
 
   provisioner "file" {
