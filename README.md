@@ -150,10 +150,11 @@ changing behaviour) and re-apply — see
 
 | Path | Role |
 | --- | --- |
-| `main.tf` | One `terraform_data` resource: opens an SSH connection, uploads the 6 scripts and a rendered env file, then runs the host, WireGuard, forwarding and AP setup scripts. |
+| `main.tf` | One `terraform_data` resource: opens an SSH connection, uploads the scripts, the `webapp/` app and a rendered env file, then runs the host, WireGuard, forwarding, AP and web UI setup scripts. |
 | `templates/wireguard-ap.env.tftpl` | Renders your config into a `KEY='value'` file the scripts `source` on the Pi, instead of having their settings hardcoded. |
 | `templates/motd.tftpl` + `ascii/monkeynuthead.txt` + `templates/AP.txt` | Combined into `~/.wireguard-ap-motd` and printed by a snippet appended to `pi_user`'s own `~/.bashrc` on every interactive login: the shared "monkey / nut / head" banner (from the [ascii](https://github.com/georgenicoll/ascii) submodule), "AP" underneath it in the same style but kept local to this repo since it's project-specific, then a summary of the available scripts plus the current SSID and subnet. Per-user rather than system-wide (`/etc/motd`), and needs no root at all. |
-| `scripts/*.sh` | The Pi-side scripts, uploaded byte-for-byte (not passed through `templatefile()`, since they use bash `${VAR}` inside heredocs that would collide with OpenTofu's own templating). `setup_host.sh` (packages, stock services, Wi-Fi country, radio unblock - the one-time-ish setup that used to be inline `sudo` commands in `main.tf`), `setup_wireguard.sh`, `setup_ap.sh`, `setup_forwarding_and_nat.sh` and `uplink_wifi.sh` all self-elevate with `sudo` internally (`[[ $EUID -eq 0 ]] \|\| exec sudo "$SCRIPT" "$@"`) rather than being invoked with `sudo` at the call site, so sudoers can be scoped to exactly these script paths - see step 2 above. |
+| `scripts/*.sh` | The Pi-side scripts, uploaded byte-for-byte (not passed through `templatefile()`, since they use bash `${VAR}` inside heredocs that would collide with OpenTofu's own templating). `setup_host.sh` (packages, stock services, Wi-Fi country, radio unblock - the one-time-ish setup that used to be inline `sudo` commands in `main.tf`), `setup_wireguard.sh`, `setup_ap.sh`, `setup_forwarding_and_nat.sh`, `uplink_wifi.sh` and `setup_webapp.sh` all self-elevate with `sudo` internally (`[[ $EUID -eq 0 ]] \|\| exec sudo "$SCRIPT" "$@"`) rather than being invoked with `sudo` at the call site, so sudoers can be scoped to exactly these script paths - see step 2 above. |
+| `webapp/` | A small FastAPI + [htmx](https://htmx.org) web UI (`app.py`, `templates/`, `static/`), uploaded as-is and run by `setup_webapp.sh` via [uv](https://docs.astral.sh/uv/) - see "Web UI" below. |
 | `variables.tf` / `outputs.tf` / `versions.tf` | The input/output contract and provider requirement (`hashicorp/null` only — no cloud provider). |
 | `wga` | Thin wrapper around `tofu`, same idea as wireguard-router's `wgr` - also fetches the WireGuard client config named by `wireguard_client_name` via wireguard-router's own `scripts/wg-peer.sh`. |
 
@@ -227,7 +228,8 @@ record of having deployed there — there's no destroy-time provisioner, so
 `hostapd`, `dnsmasq`, the NAT rule, the bridge and the uploaded scripts are
 left exactly as they were. To actually disable the AP, SSH in and stop/disable
 the relevant units by hand (`mnet-hostapd@*`, `dnsmasq`, `mnet-ap-nat`,
-`mnet-ap-local-routing`, `mnet-ap-wg-watchdog.timer`), and remove
+`mnet-ap-local-routing`, `mnet-ap-wg-watchdog.timer`, `mnet-ap-webapp`), and
+remove
 `/etc/NetworkManager/dispatcher.d/90-mnet-ap-wg-route-precedence` if you also
 want the `wg0` route-precedence fix gone, or ask for a destroy-time
 provisioner to be added if you want `destroy` to do that automatically.
@@ -313,6 +315,37 @@ See `/mnt/c/Users/george/Dropbox/Network/wireguard/pi-ap-handoff.md` for the
 full hardware/design rationale and troubleshooting reference these scripts
 were built from.
 
+## Web UI
+
+A small FastAPI + [htmx](https://htmx.org) app, currently just a starting
+point: the main page shows the Pi's hostname and IP address, fetched via
+htmx from `/api/hostinfo` rather than baked into the initial HTML.
+
+```
+http://<pi_host>:8000/       # or http://<ap_ip>:8000/ once joined to the AP
+```
+
+- **`setup_webapp.sh`** installs [uv](https://docs.astral.sh/uv/) system-wide
+  (`/usr/local/bin`, so it's on `PATH` for both this script and the service
+  below, whichever user runs each), then runs `webapp/app.py` as
+  `mnet-ap-webapp.service` via `uv run app.py`. There's no `requirements.txt`
+  or venv to manage by hand: `app.py` declares its own dependencies with
+  [PEP 723](https://peps.python.org/pep-0723/) inline script metadata (the
+  `# /// script ... ///` block at the top), and `uv run` resolves and caches
+  an environment for them on the fly - editing that block is the only thing
+  needed to add a dependency.
+- Runs as `pi_user`, not root, on `0.0.0.0:8000` - reachable from `eth0`,
+  the AP's own Wi-Fi, and `wg0` alike. No auth yet; treat it as trusted-network-only
+  for now.
+- **htmx is vendored** (`webapp/static/htmx.min.js`), not pulled from a CDN,
+  for the same reason as the `ascii` banner submodule: this AP may have no
+  internet uplink at all (e.g. `dual` mode, or before `uplink_wifi.sh` has
+  been run), and the page should still work.
+- `uv`'s own package cache means only the *first* run on a given Pi needs
+  internet access to resolve `app.py`'s dependencies - later re-runs (e.g.
+  after a reboot, or a redeploy that doesn't touch the dependency block)
+  don't.
+
 ## Notes
 
 - `psk` is marked `sensitive`, but it still ends up in OpenTofu state because
@@ -368,4 +401,9 @@ scripts/setup_forwarding_and_nat.sh
 scripts/setup_ap.sh
 scripts/uplink_wifi.sh
 scripts/view_currently_associated_clients.sh
+scripts/setup_webapp.sh
+webapp/app.py
+webapp/templates/index.html
+webapp/static/htmx.min.js       vendored, not CDN-loaded - see "Web UI"
+webapp/static/favicon.svg
 ```

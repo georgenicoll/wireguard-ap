@@ -7,7 +7,12 @@ locals {
     "setup_ap.sh",
     "uplink_wifi.sh",
     "view_currently_associated_clients.sh",
+    "setup_webapp.sh",
   ]
+
+  # Every file under webapp/ (app.py, templates/, static/), so a change to
+  # any of them - not just app.py - triggers a redeploy.
+  webapp_files = sort(fileset("${path.module}/webapp", "**"))
 
   # Derived from ap_net alone: the Pi is host .1, DHCP covers host .2 up to
   # the second-to-last address (last usable before the broadcast address).
@@ -77,6 +82,7 @@ resource "terraform_data" "ap_deploy" {
   triggers_replace = {
     env_file       = sha256(local.env_file)
     scripts        = sha256(join("", [for f in local.scripts : filesha256("${path.module}/scripts/${f}")]))
+    webapp         = sha256(join("", [for f in local.webapp_files : filesha256("${path.module}/webapp/${f}")]))
     motd           = sha256(local.motd)
     wireguard_conf = sha256(local.wireguard_conf)
     mode           = var.mode
@@ -138,6 +144,21 @@ resource "terraform_data" "ap_deploy" {
   }
 
   provisioner "file" {
+    source      = "${path.module}/scripts/setup_webapp.sh"
+    destination = "${local.remote_dir}/setup_webapp.sh"
+  }
+
+  provisioner "file" {
+    # No trailing slash on source: uploads the webapp/ folder itself (SCP
+    # creates it) into destination - the parent dir, which does need to
+    # already exist. A trailing slash ("contents only") needs the
+    # destination directory to already exist remotely, which it doesn't on
+    # a first deploy.
+    source      = "${path.module}/webapp"
+    destination = local.remote_dir
+  }
+
+  provisioner "file" {
     content     = local.motd
     destination = "${local.remote_dir}/.wireguard-ap-motd"
   }
@@ -173,6 +194,7 @@ resource "terraform_data" "ap_deploy" {
       "${local.remote_dir}/setup_forwarding_and_nat.sh",
       "if [ -s ${local.remote_dir}/.wg0.conf ]; then ${local.remote_dir}/setup_wireguard.sh; else rm -f ${local.remote_dir}/.wg0.conf; fi",
       "${local.remote_dir}/setup_ap.sh ${var.mode} ${var.uplink_band}",
+      "${local.remote_dir}/setup_webapp.sh",
     ]
   }
 

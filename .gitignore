@@ -24,3 +24,7 @@ crash.*.log
 
 # Editor/OS noise
 .DS_Store
+
+# Python
+__pycache__/
+*.pyc
