@@ -332,17 +332,23 @@ baked into the initial HTML, plus links to two status pages:
   (SSH session details aren't exposed here).
 - **`/manage`** — runs `setup_ap.sh`/`uplink_wifi.sh` with parameters chosen
   in the browser (mode, band, upstream SSID/password) and streams their
-  output live rather than just showing a final result: POST starts the
-  script as a background job and returns a `job_id` (never the Wi-Fi
-  password itself - that never touches a URL or browser history), then the
-  browser's native `EventSource` consumes a `GET /run/stream/<job_id>`
-  Server-Sent-Events endpoint. Jobs are tracked in a plain in-memory dict -
-  deliberately: this is a single-user local admin tool, not a job queue
-  that needs to survive a restart. Also has a "Danger zone" - a
-  confirm-gated (Pico `<dialog>`, not a bare `confirm()`) button that runs
-  `shutdown_pi.sh` (`systemctl poweroff`) via `POST /shutdown`, fired as a
-  background task so the HTTP response reaches the browser before the Pi
-  actually goes down.
+  output live rather than just showing a final result, using htmx's
+  official [SSE extension](https://htmx.org/extensions/sse/)
+  (`webapp/static/htmx-ext-sse.js`, vendored) rather than hand-written
+  `fetch()`/`EventSource` JS: the form does a normal `hx-post`, whose
+  response is an HTML fragment (built with `htpy`, escaping each streamed
+  line - it's swapped in via `innerHTML`, not treated as plain text like
+  before) wired with `hx-ext="sse" sse-connect="/run/stream/<job_id>"` -
+  htmx notices the newly-swapped element's attributes and opens the stream
+  itself. The Wi-Fi password still never touches a URL or browser history
+  (POST body only; the job id in the stream URL carries no secret). Jobs
+  are tracked in a plain in-memory dict - deliberately: this is a
+  single-user local admin tool, not a job queue that needs to survive a
+  restart. Also has a "Danger zone" - a confirm-gated (Pico `<dialog>`, not
+  a bare `confirm()`) button that runs `shutdown_pi.sh`
+  (`systemctl poweroff`) via `hx-post="/shutdown"`, fired as a background
+  task so the HTTP response reaches the browser before the Pi actually goes
+  down.
 
 Both status pages just run the corresponding script and show its raw
 output in a `<pre>` block - a starting point, not a polished table, per
@@ -385,10 +391,14 @@ https://<pi_host>/       # or https://<ap_ip>/ once joined to the AP - also link
   the app via `EnvironmentFile=` in `mnet-ap-webapp.service`, pointing at
   the same `wireguard-ap.env` the shell scripts already source - no
   separate config to maintain.
-- **htmx is vendored** (`webapp/static/htmx.min.js`), not pulled from a CDN,
-  for the same reason as the `ascii` banner submodule: this AP may have no
-  internet uplink at all (e.g. `dual` mode, or before `uplink_wifi.sh` has
-  been run), and the page should still work.
+- **htmx is vendored** (`webapp/static/htmx.min.js`, `htmx-ext-sse.js`), not
+  pulled from a CDN, for the same reason as the `ascii` banner submodule:
+  this AP may have no internet uplink at all (e.g. `dual` mode, or before
+  `uplink_wifi.sh` has been run), and the page should still work. Pinned at
+  2.0.10 (npm's actual `latest`, not the `next`-tagged 4.0.0 tried
+  initially) specifically because the SSE extension needs htmx's classic
+  `defineExtension` API, which v4 replaced with `registerExtension` -
+  confirmed by grepping the vendored file rather than assuming.
 - `uv`'s own package cache means only the *first* run on a given Pi needs
   internet access to resolve `app.py`'s dependencies - later re-runs (e.g.
   after a reboot, or a redeploy that doesn't touch the dependency block)
@@ -461,5 +471,6 @@ webapp/templates/manage.html
 webapp/static/site.css
 webapp/static/pico.min.css      vendored, not CDN-loaded - see "Web UI"
 webapp/static/htmx.min.js       vendored, not CDN-loaded - see "Web UI"
+webapp/static/htmx-ext-sse.js   vendored, not CDN-loaded - see "Web UI"
 webapp/static/favicon.svg
 ```

@@ -10,6 +10,7 @@
 # ]
 # ///
 import asyncio
+import html
 import os
 import secrets
 import socket
@@ -21,7 +22,7 @@ from fastapi import Depends, FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from htpy import dd, dl, dt
+from htpy import dd, dl, dt, pre
 from starlette.middleware.sessions import SessionMiddleware
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -132,6 +133,27 @@ async def _start_job(name: str, args: list[str]) -> str:
     return job_id
 
 
+def _sse_output_fragment(job_id: str, output_id: str) -> str:
+    # htmx's SSE extension swaps each event's data in via innerHTML (see
+    # _stream_job, which HTML-escapes it accordingly) using this element's
+    # own hx-swap - "beforeend" here, so each message is appended rather
+    # than replacing the previous ones. Keeps the same id as the original
+    # placeholder (an outerHTML swap replaces the element entirely), so the
+    # form's hx-target selector still finds it on a second run.
+    return str(
+        pre(
+            f"#{output_id}.output",
+            **{
+                "hx-ext": "sse",
+                "sse-connect": f"/run/stream/{job_id}",
+                "sse-swap": "message",
+                "sse-close": "done",
+                "hx-swap": "beforeend",
+            },
+        )
+    )
+
+
 async def _stream_job(job_id: str):
     process = _jobs.get(job_id)
     if process is None or process.stdout is None:
@@ -141,30 +163,37 @@ async def _stream_job(job_id: str):
         line = await process.stdout.readline()
         if not line:
             break
-        yield f"data: {line.decode(errors='replace').rstrip(chr(10))}\n\n"
+        text = html.escape(line.decode(errors="replace").rstrip("\n"))
+        yield f"data: {text}<br>\n\n"
     returncode = await process.wait()
-    yield f"data: \n\ndata: [exit code {returncode}]\n\n"
+    yield f"data: <br>[exit code {returncode}]<br>\n\n"
     yield "event: done\ndata: \n\n"
     _jobs.pop(job_id, None)
 
 
-@app.post("/run/setup_ap", dependencies=[Depends(require_login)])
+@app.post(
+    "/run/setup_ap", response_class=HTMLResponse, dependencies=[Depends(require_login)]
+)
 async def start_setup_ap(mode: str = Form(...), band: str = Form("5")):
     if mode not in ("dual", "uplink"):
         raise HTTPException(status_code=400, detail="invalid mode")
     if band not in ("5", "2.4"):
         raise HTTPException(status_code=400, detail="invalid band")
     job_id = await _start_job("setup_ap.sh", [mode, band])
-    return {"job_id": job_id}
+    return _sse_output_fragment(job_id, "setup-ap-output")
 
 
-@app.post("/run/uplink_wifi", dependencies=[Depends(require_login)])
+@app.post(
+    "/run/uplink_wifi",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_login)],
+)
 async def start_uplink_wifi(ssid: str = Form(...), password: str = Form("")):
     if not ssid.strip():
         raise HTTPException(status_code=400, detail="SSID required")
     args = [ssid, password] if password else [ssid]
     job_id = await _start_job("uplink_wifi.sh", args)
-    return {"job_id": job_id}
+    return _sse_output_fragment(job_id, "uplink-output")
 
 
 @app.get("/run/stream/{job_id}", dependencies=[Depends(require_login)])
@@ -172,7 +201,9 @@ async def stream_job(job_id: str):
     return StreamingResponse(_stream_job(job_id), media_type="text/event-stream")
 
 
-@app.post("/shutdown", dependencies=[Depends(require_login)])
+@app.post(
+    "/shutdown", response_class=HTMLResponse, dependencies=[Depends(require_login)]
+)
 async def shutdown_pi():
     # Fire-and-forget: "systemctl poweroff" schedules the shutdown and
     # returns, but not so fast that this response is guaranteed to reach
@@ -182,7 +213,7 @@ async def shutdown_pi():
         await asyncio.create_subprocess_exec(str(SCRIPTS_DIR / "shutdown_pi.sh"))
 
     asyncio.create_task(_run())
-    return {"status": "shutting down"}
+    return "Shutting down now - this page will stop responding shortly."
 
 
 @app.get(

@@ -7,6 +7,8 @@
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
   <link rel="stylesheet" href="/static/pico.min.css">
   <link rel="stylesheet" href="/static/site.css">
+  <script src="/static/htmx.min.js"></script>
+  <script src="/static/htmx-ext-sse.js"></script>
   <style>
     pre.output { background: var(--pico-code-background-color); padding: 1rem; min-height: 3rem; max-height: 20rem; overflow-y: auto; white-space: pre-wrap; }
   </style>
@@ -17,7 +19,8 @@
     <h2>Manage AP</h2>
     <article>
       <h2>Configure AP mode</h2>
-      <form id="setup-ap-form">
+      <form hx-post="/run/setup_ap" hx-target="#setup-ap-output" hx-swap="outerHTML"
+        hx-disabled-elt="find button[type=submit]">
         <fieldset>
           <legend>Mode</legend>
           <label><input type="radio" name="mode" value="dual" checked onchange="updateBandField()"> Dual (2.4 &amp; 5 GHz, both broadcasting this AP)</label>
@@ -28,10 +31,7 @@
           <option value="5" selected>5 GHz</option>
           <option value="2.4">2.4 GHz</option>
         </select>
-        <button type="button" id="setup-ap-btn"
-          onclick="runJob('setup-ap-form', '/run/setup_ap', 'setup-ap-output', 'setup-ap-btn')">
-          Run setup_ap.sh
-        </button>
+        <button type="submit">Run setup_ap.sh</button>
       </form>
       <pre id="setup-ap-output" class="output"></pre>
     </article>
@@ -39,15 +39,13 @@
     <article>
       <h2>Join upstream Wi-Fi</h2>
       <p>Uplink mode only - has no effect until <code>wlan0</code> is free to act as a client (see above).</p>
-      <form id="uplink-form">
+      <form hx-post="/run/uplink_wifi" hx-target="#uplink-output" hx-swap="outerHTML"
+        hx-disabled-elt="find button[type=submit]">
         <label for="uplink-ssid">Uplink SSID</label>
         <input type="text" id="uplink-ssid" name="ssid" required>
         <label for="uplink-password">Uplink Password</label>
         <input type="password" id="uplink-password" name="password" placeholder="leave blank for an open network">
-        <button type="button" id="uplink-btn"
-          onclick="runJob('uplink-form', '/run/uplink_wifi', 'uplink-output', 'uplink-btn')">
-          Run uplink_wifi.sh
-        </button>
+        <button type="submit">Run uplink_wifi.sh</button>
       </form>
       <pre id="uplink-output" class="output"></pre>
     </article>
@@ -56,7 +54,7 @@
       <h2>Danger zone</h2>
       <p>Powers off the Pi immediately. You'll need physical access (or a
         smart plug/remote power switch) to turn it back on.</p>
-      <button type="button" id="shutdown-btn" class="outline danger"
+      <button type="button" class="outline danger"
         onclick="document.getElementById('shutdown-dialog').showModal()">
         Shut down the Pi
       </button>
@@ -72,65 +70,22 @@
       <p>You'll need physical access (or a smart plug/remote power switch)
         to turn it back on.</p>
       <footer>
-        <button class="secondary" onclick="document.getElementById('shutdown-dialog').close()">
-          Cancel
+        <form method="dialog"><button class="secondary">Cancel</button></form>
+        <button class="danger" hx-post="/shutdown" hx-target="#shutdown-status" hx-swap="innerHTML"
+          hx-on::after-request="document.getElementById('shutdown-dialog').close()">
+          Shut down
         </button>
-        <button class="danger" onclick="confirmShutdown()">Shut down</button>
       </footer>
     </article>
   </dialog>
 
   <script>
-    async function confirmShutdown() {
-      document.getElementById('shutdown-dialog').close();
-      const button = document.getElementById('shutdown-btn');
-      const status = document.getElementById('shutdown-status');
-      button.disabled = true;
-      try {
-        const resp = await fetch('/shutdown', { method: 'POST' });
-        status.textContent = resp.ok
-          ? 'Shutting down now - this page will stop responding shortly.'
-          : 'Failed to start shutdown (HTTP ' + resp.status + ')';
-      } catch (err) {
-        status.textContent = 'Shutting down now (connection dropped, as expected).';
-      }
-    }
-
     function updateBandField() {
       const mode = document.querySelector('input[name="mode"]:checked').value;
       // Disabled fields are omitted from form submissions entirely, so
       // dual mode correctly sends no "band" at all (the backend defaults
       // it to 5, which dual mode ignores anyway).
       document.getElementById('band').disabled = mode !== 'uplink';
-    }
-
-    async function runJob(formId, endpoint, outputId, buttonId) {
-      const output = document.getElementById(outputId);
-      const button = document.getElementById(buttonId);
-      const data = new FormData(document.getElementById(formId));
-      output.textContent = '';
-      button.disabled = true;
-      let es;
-      try {
-        const resp = await fetch(endpoint, { method: 'POST', body: data });
-        if (!resp.ok) {
-          output.textContent = 'Failed to start (HTTP ' + resp.status + ')';
-          button.disabled = false;
-          return;
-        }
-        const { job_id } = await resp.json();
-        es = new EventSource('/run/stream/' + job_id);
-        es.onmessage = (e) => {
-          output.textContent += e.data + '\n';
-          output.scrollTop = output.scrollHeight;
-        };
-        es.addEventListener('done', () => { es.close(); button.disabled = false; });
-        es.onerror = () => { es.close(); button.disabled = false; };
-      } catch (err) {
-        output.textContent = 'Error: ' + err;
-        if (es) es.close();
-        button.disabled = false;
-      }
     }
   </script>
 </body>
