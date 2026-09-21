@@ -162,4 +162,9 @@ done
 systemctl enable dnsmasq
 systemctl restart dnsmasq
 
+# br-ap only exists from this point on - re-run so its local-routing table
+# (set up by setup_forwarding_and_nat.sh, which runs before br-ap exists)
+# actually gets populated, rather than silently skipping it every time.
+[[ -x /usr/local/sbin/mnet-ap-local-routing.sh ]] && /usr/local/sbin/mnet-ap-local-routing.sh
+
 echo "Done ($MODE). Join '${SSID}' and run: ssh ${PI_USER}@${AP_IP}"

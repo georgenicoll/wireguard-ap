@@ -39,14 +39,18 @@ Wants=network-pre.target
 Type=oneshot
 RemainAfterExit=yes
 ExecStart=/usr/sbin/nft -f /etc/nftables-mnet-ap.conf
-ExecStop=/usr/sbin/nft delete table ip mnet_ap
+ExecStop=/bin/sh -c '/usr/sbin/nft delete table ip mnet_ap 2>/dev/null; /usr/sbin/nft delete table ip mnet_ap_route 2>/dev/null; true'
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
 systemctl daemon-reload
-systemctl enable --now mnet-ap-nat.service
+systemctl enable mnet-ap-nat.service
+# "enable --now" is a no-op if the unit is already active from a previous
+# apply, which would silently skip re-reading an updated
+# /etc/nftables-mnet-ap.conf - explicit restart instead, every time.
+systemctl restart mnet-ap-nat.service
 
 # --- keep connections that arrive on eth0/br-ap replying via that same ------
 # interface, even if wireguard later adds a route for the same subnet.
@@ -60,6 +64,15 @@ systemctl enable --now mnet-ap-nat.service
 # or future peer registration without needing to know about peer LANs at
 # all - see the incident this addresses in the WireGuard section of the
 # README.
+#
+# Deliberately unconditional (no "ct state new" restriction): marking only
+# brand new connections would never protect one already open when this rule
+# is (re)loaded - e.g. the SSH session running this very apply, or any
+# session open from before wg0 last came up - since a mark only applies from
+# the point a matching packet is actually seen. Re-marking every inbound
+# packet on every run is cheap and covers that case too: the next inbound
+# packet of an already-established connection gets it (re-)tagged just the
+# same as a new one would.
 tee -a /etc/nftables-mnet-ap.conf >/dev/null <<EOF
 
 add table ip mnet_ap_route
@@ -67,8 +80,8 @@ delete table ip mnet_ap_route
 table ip mnet_ap_route {
   chain input {
     type filter hook input priority mangle; policy accept;
-    iifname "eth0" ct state new ct mark set 0x1
-    iifname "${BR}" ct state new ct mark set 0x2
+    iifname "eth0" ct mark set 0x1
+    iifname "${BR}" ct mark set 0x2
   }
   chain output {
     type route hook output priority mangle; policy accept;

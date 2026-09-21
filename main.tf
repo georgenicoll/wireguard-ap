@@ -159,15 +159,19 @@ resource "terraform_data" "ap_deploy" {
   # script paths rather than granting NOPASSWD for everything - see
   # README's sudoers section.
   #
-  # Order matters: setup_host.sh installs wireguard-tools first; wg0 needs
-  # to exist before setup_forwarding_and_nat.sh's NAT rule excludes it (in
-  # practice nftables would accept a rule naming an interface that doesn't
-  # exist yet, but bringing wg0 up first avoids relying on that).
+  # Order matters: setup_forwarding_and_nat.sh runs (and installs its
+  # interface-pinning protection for connections into the Pi itself) before
+  # setup_wireguard.sh brings wg0 up, not after - so that protection is
+  # already active before wg0 can add a route that collides with a
+  # connected interface, rather than there being a window where it isn't
+  # (nftables accepts a rule naming an interface, here wg0 in the NAT
+  # exclusion, that doesn't exist yet). setup_host.sh still goes first: it
+  # installs wireguard-tools, which setup_wireguard.sh needs.
   provisioner "remote-exec" {
     inline = [
       "${local.remote_dir}/setup_host.sh ${var.reg_domain}",
-      "if [ -s ${local.remote_dir}/.wg0.conf ]; then ${local.remote_dir}/setup_wireguard.sh; else rm -f ${local.remote_dir}/.wg0.conf; fi",
       "${local.remote_dir}/setup_forwarding_and_nat.sh",
+      "if [ -s ${local.remote_dir}/.wg0.conf ]; then ${local.remote_dir}/setup_wireguard.sh; else rm -f ${local.remote_dir}/.wg0.conf; fi",
       "${local.remote_dir}/setup_ap.sh ${var.mode} ${var.uplink_band}",
     ]
   }
