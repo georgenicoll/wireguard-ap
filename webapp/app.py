@@ -4,6 +4,7 @@
 #   "fastapi",
 #   "uvicorn",
 #   "jinja2",
+#   "htpy",
 # ]
 # ///
 import socket
@@ -13,6 +14,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from htpy import dd, dl, dt
 
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -41,12 +43,14 @@ def index(request: Request):
 
 @app.get("/api/hostinfo", response_class=HTMLResponse)
 def hostinfo():
-    return f"""
-    <dl>
-      <dt>Hostname</dt><dd>{socket.gethostname()}</dd>
-      <dt>IP address</dt><dd>{_local_ip()}</dd>
-    </dl>
-    """
+    return str(
+        dl[
+            dt["Hostname"],
+            dd[socket.gethostname()],
+            dt["IP address"],
+            dd[_local_ip()],
+        ]
+    )
 
 
 if __name__ == "__main__":
