@@ -7,6 +7,13 @@ nmcli -f DEVICE,TYPE,STATE,CONNECTION device status | grep -E '^DEVICE|eth0|wlan
 echo; echo "== Default routes (lowest metric is used) =="
 ip -4 route show default
 
+echo; echo "== SSH sessions (interactive logins) =="
+who -u 2>/dev/null || true
+
+echo; echo "== SSH connections (established TCP, incl. non-interactive) =="
+sudo ss -tnp state established '( dport = :22 or sport = :22 )' 2>/dev/null \
+  || ss -tn state established '( dport = :22 or sport = :22 )'
+
 APS=$(iw dev | awk '$1=="Interface"{i=$2} $1=="type" && $2=="AP"{print i}')
 
 echo; echo "== Access points =="
