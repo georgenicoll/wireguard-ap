@@ -12,6 +12,12 @@ source "$ENV_FILE"
 echo "net.ipv4.ip_forward=1" | tee /etc/sysctl.d/90-mnet-ap.conf >/dev/null
 sysctl -w net.ipv4.ip_forward=1
 
+# === write everything first, then load it all at the end (in dependency ====
+# order) - writing config and reloading a service interleaved is how the
+# mnet_ap_route table below once went missing: mnet-ap-nat.service got
+# restarted while the file only had the NAT table on disk, and nothing
+# reloaded it again after the rest was appended.
+
 # wg0 is deliberately excluded: wireguard-router's mesh is set up site-to-
 # site (wireguard_nat = false there, and this Pi is registered with --lan
 # rather than just its own tunnel address), so traffic headed into the
@@ -28,29 +34,6 @@ table ip mnet_ap {
   }
 }
 EOF
-
-tee /etc/systemd/system/mnet-ap-nat.service >/dev/null <<'EOF'
-[Unit]
-Description=NAT for mnet-ap AP
-After=network-pre.target
-Wants=network-pre.target
-
-[Service]
-Type=oneshot
-RemainAfterExit=yes
-ExecStart=/usr/sbin/nft -f /etc/nftables-mnet-ap.conf
-ExecStop=/bin/sh -c '/usr/sbin/nft delete table ip mnet_ap 2>/dev/null; /usr/sbin/nft delete table ip mnet_ap_route 2>/dev/null; true'
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-systemctl daemon-reload
-systemctl enable mnet-ap-nat.service
-# "enable --now" is a no-op if the unit is already active from a previous
-# apply, which would silently skip re-reading an updated
-# /etc/nftables-mnet-ap.conf - explicit restart instead, every time.
-systemctl restart mnet-ap-nat.service
 
 # --- keep connections that arrive on eth0/br-ap replying via that same ------
 # interface, even if wireguard later adds a route for the same subnet.
@@ -88,6 +71,22 @@ table ip mnet_ap_route {
     ct mark != 0x0 meta mark set ct mark
   }
 }
+EOF
+
+tee /etc/systemd/system/mnet-ap-nat.service >/dev/null <<'EOF'
+[Unit]
+Description=NAT for mnet-ap AP
+After=network-pre.target
+Wants=network-pre.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f /etc/nftables-mnet-ap.conf
+ExecStop=/bin/sh -c '/usr/sbin/nft delete table ip mnet_ap 2>/dev/null; /usr/sbin/nft delete table ip mnet_ap_route 2>/dev/null; true'
+
+[Install]
+WantedBy=multi-user.target
 EOF
 
 {
@@ -136,6 +135,14 @@ ExecStop=/bin/true
 WantedBy=multi-user.target
 EOF
 
+# === now load everything, in dependency order ===============================
 systemctl daemon-reload
+
+systemctl enable mnet-ap-nat.service
+# "enable --now" is a no-op if the unit is already active from a previous
+# apply, which would silently skip re-reading an updated
+# /etc/nftables-mnet-ap.conf - explicit restart instead, every time.
+systemctl restart mnet-ap-nat.service
+
 systemctl enable mnet-ap-local-routing.service
 systemctl restart mnet-ap-local-routing.service
