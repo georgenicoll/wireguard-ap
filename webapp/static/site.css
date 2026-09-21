@@ -8,12 +8,20 @@ header form { margin: 0; }
 /* Reuses Pico's own "delete" color token (also used for the login error
    message) rather than a hardcoded color, so it stays consistent with
    Pico's theme, light/dark mode included. Used for the logout button and
-   any other destructive/irreversible action (e.g. shutdown). */
+   any other destructive/irreversible action (e.g. shutdown).
+   Sets the actual rendered properties directly rather than overriding
+   Pico's --pico-secondary-* custom properties: Pico's precompiled CSS
+   doesn't consistently reference those on every state (notably hover),
+   so that approach silently didn't render red. This does, since site.css
+   loads after pico.min.css and wins on normal cascade order alone. */
 .danger {
-  --pico-secondary: var(--pico-del-color);
-  --pico-secondary-background: transparent;
-  --pico-secondary-border: var(--pico-del-color);
-  --pico-secondary-hover: var(--pico-del-color);
-  --pico-secondary-hover-background: var(--pico-del-color);
-  --pico-secondary-focus: var(--pico-del-color);
+  color: var(--pico-del-color) !important;
+  border-color: var(--pico-del-color) !important;
+  background: transparent !important;
+}
+.danger:hover,
+.danger:focus {
+  color: var(--pico-contrast, #fff) !important;
+  background: var(--pico-del-color) !important;
+  border-color: var(--pico-del-color) !important;
 }
