@@ -55,3 +55,68 @@ EOF
 chmod 755 /etc/NetworkManager/dispatcher.d/90-mnet-ap-wg-route-precedence
 
 /usr/local/sbin/mnet-ap-wg-route-precedence.sh
+
+# --- re-resolve the peer's endpoint hostname once its handshake goes stale --
+# Ported from OpenWRT's wireguard_watchdog (Jason A. Donenfeld / Aleksandr V.
+# Piskunov, GPL-2.0) - see /usr/bin/wireguard_watchdog on an OpenWRT router.
+# wg-quick only resolves Endpoint once, at startup; if a dynamic-DNS
+# hostname's IP changes afterward the tunnel silently keeps talking to the
+# old address until something re-resolves it (this happened for real: see
+# git history around this comment). Re-resolving via "wg set ... endpoint
+# host:port" updates just that peer in place - no interface restart, no
+# route flap - unlike this file's own DNS change, which does need a
+# restart because it's *this Pi's* address that changed, not the peer's.
+tee /usr/local/sbin/mnet-ap-wg-watchdog.sh >/dev/null <<'SCRIPT'
+#!/usr/bin/env bash
+set -euo pipefail
+IFACE=wg0
+STALE_AFTER=150 # seconds - matches the upstream OpenWRT script's default
+
+ip link show "$IFACE" &>/dev/null || exit 0
+
+for peer in $(wg show "$IFACE" peers 2>/dev/null); do
+  keepalive="$(wg show "$IFACE" persistent-keepalive | awk -v p="$peer" '$1==p{print $2}')"
+  [[ -z $keepalive || $keepalive == off ]] && continue
+
+  endpoint="$(awk '/^\[Peer\]/{p=1} p && /^Endpoint *=/{print $3; exit}' "/etc/wireguard/${IFACE}.conf")"
+  [[ -z $endpoint ]] && continue
+  host="${endpoint%:*}"
+  port="${endpoint##*:}"
+
+  # nothing to re-resolve if the config already names a literal address
+  [[ $host =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] && continue
+
+  last_handshake="$(wg show "$IFACE" latest-handshakes | awk -v p="$peer" '$1==p{print $2}')"
+  [[ -z $last_handshake ]] && continue
+  idle=$(($(date +%s) - last_handshake))
+  ((idle < STALE_AFTER)) && continue
+
+  logger -t mnet-ap-wg-watchdog "$IFACE endpoint $host:$port idle ${idle}s, re-resolving"
+  wg set "$IFACE" peer "$peer" endpoint "$host:$port"
+done
+SCRIPT
+chmod 755 /usr/local/sbin/mnet-ap-wg-watchdog.sh
+
+tee /etc/systemd/system/mnet-ap-wg-watchdog.service >/dev/null <<'EOF'
+[Unit]
+Description=Re-resolve wg0's peer endpoint if its handshake goes stale
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/mnet-ap-wg-watchdog.sh
+EOF
+
+tee /etc/systemd/system/mnet-ap-wg-watchdog.timer >/dev/null <<'EOF'
+[Unit]
+Description=Run mnet-ap-wg-watchdog every minute
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=1min
+
+[Install]
+WantedBy=timers.target
+EOF
+
+systemctl daemon-reload
+systemctl enable --now mnet-ap-wg-watchdog.timer
