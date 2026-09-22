@@ -4,14 +4,15 @@
 #   "fastapi",
 #   "uvicorn",
 #   "jinja2",
-#   "htpy",
 #   "itsdangerous",
 #   "python-multipart",
 # ]
 # ///
 import asyncio
 import html
+import logging
 import os
+import re
 import secrets
 import socket
 import subprocess
@@ -22,88 +23,63 @@ from fastapi import Depends, FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from htpy import dd, dl, dt, pre
 from starlette.middleware.sessions import SessionMiddleware
 
 BASE_DIR = Path(__file__).resolve().parent
 # Where the setup scripts live - one level up, alongside webapp/ itself
-# (see main.tf's remote_dir).
-SCRIPTS_DIR = BASE_DIR.parent
+# (see main.tf's remote_dir). Only used here for view_wireguard_status.sh,
+# to get at "wg show"'s root-only handshake info via its existing
+# self-elevation (see the README's sudoers section) rather than trying to
+# sudo straight from the app, which has no sudoers coverage to do that.
+SCRIPTS_DIR = Path(os.environ.get("SCRIPTS_DIR", BASE_DIR.parent))
 
-# Both sourced from wireguard-ap.env (EnvironmentFile= in the systemd unit -
-# see setup_webapp.sh), the same file the shell scripts use, rather than
-# being set separately here: SSID for display, PSK (the AP's own Wi-Fi
-# password) doubling as this site's login password.
-SSID = os.environ.get("SSID", "mnet-ap")
-PSK = os.environ.get("PSK", "")
+# Interfaces the AP setup can create (see setup_ap.sh/setup_host.sh) -
+# eth0 the wired uplink, wlan0/wlan1 the two radios (AP and/or Wi-Fi
+# uplink client depending on mode). IF_24/IF_5/SSID reach the app the same
+# way PSK does (EnvironmentFile= in the systemd unit, sourced from
+# wireguard-ap.env) - IF_24/IF_5 default to setup_ap.sh's own examples for
+# local dev, where that env file doesn't exist.
+INTERFACES = ["eth0", "wlan0", "wlan1"]
+IF_24 = os.environ.get("IF_24", "wlan0")
+IF_5 = os.environ.get("IF_5", "wlan1")
+BR = os.environ.get("BR", "br-ap")
+SSID = os.environ.get("SSID", "")
 
-# Persisted so a service restart (e.g. a redeploy) doesn't invalidate every
-# existing login session - generated once, on first run.
-SECRET_FILE = BASE_DIR / ".session_secret"
-if SECRET_FILE.exists():
-    SESSION_SECRET = SECRET_FILE.read_text().strip()
-else:
-    SESSION_SECRET = secrets.token_hex(32)
-    SECRET_FILE.write_text(SESSION_SECRET)
-    SECRET_FILE.chmod(0o600)
-
-app = FastAPI()
-app.add_middleware(SessionMiddleware, secret_key=SESSION_SECRET, https_only=True)
-app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
-templates = Jinja2Templates(directory=BASE_DIR / "templates")
-
-
-def require_login(request: Request) -> None:
-    if not request.session.get("authenticated"):
-        raise HTTPException(status_code=303, headers={"Location": "/login"})
-
-
-def _local_ip() -> str:
-    # Doesn't actually send anything (UDP connect just picks a local route);
-    # works even with no default route, since it falls back below.
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    try:
-        s.connect(("10.255.255.255", 1))
-        return s.getsockname()[0]
-    except OSError:
-        return "unknown"
-    finally:
-        s.close()
-
-
-@app.get("/", response_class=HTMLResponse, dependencies=[Depends(require_login)])
-def index(request: Request):
-    return templates.TemplateResponse(
-        request, "index.html", {"ssid": SSID, "show_logout": True}
-    )
-
-
-@app.get(
-    "/api/hostinfo", response_class=HTMLResponse, dependencies=[Depends(require_login)]
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
 )
-def hostinfo():
-    return str(
-        dl[
-            dt["Hostname"],
-            dd[socket.gethostname()],
-            dt["IP address"],
-            dd[_local_ip()],
-        ]
-    )
+LOGGER = logging.getLogger(__name__)
 
 
-def _run_script(name: str) -> str:
+def _run(cmd: list[str], timeout: float = 3) -> str:
+    # Command may not even exist here (e.g. nmcli/iw, both Pi-only - see
+    # dev_webapp.sh) - caught the same as a failed/timed-out run, since
+    # either way there's just no data to show.
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    return result.stdout if result.returncode == 0 else ""
+
+
+def _run_script(name: str, timeout: float = 10) -> str:
     # Both scripts self-elevate internally (sudo, NOPASSWD - see the
     # README's sudoers section) rather than being invoked with sudo here.
+    # Not found at all locally (SCRIPTS_DIR matches the Pi's flat layout,
+    # not this repo's scripts/ subdirectory) - caught and surfaced inline
+    # (the AP/WireGuard Details pages show this text directly) rather
+    # than a hard 500.
+    script = SCRIPTS_DIR / name
+    LOGGER.info("Attempting to run script: %s", str(script))
     try:
         result = subprocess.run(
-            [str(SCRIPTS_DIR / name)],
-            capture_output=True,
-            text=True,
-            timeout=15,
+            [str(script)], capture_output=True, text=True, timeout=timeout
         )
     except (OSError, subprocess.TimeoutExpired) as e:
+        LOGGER.info("Failed to run: %s - %s", str(script), str(e))
         return f"Failed to run {name}: {e}"
+    LOGGER.info("Finished running: %s", str(script))
     output = result.stdout
     if result.returncode != 0:
         output += f"\n(exit code {result.returncode})\n{result.stderr}"
@@ -119,9 +95,8 @@ _jobs: dict[str, asyncio.subprocess.Process] = {}
 
 
 async def _start_job(name: str, args: list[str]) -> str:
-    # Both setup_ap.sh and uplink_wifi.sh already self-elevate internally
-    # (sudo, NOPASSWD - see the README's sudoers section), same as
-    # _run_script above.
+    # setup_ap.sh and uplink_wifi.sh both self-elevate internally (sudo,
+    # NOPASSWD - see the README's sudoers section), same as _run_script.
     process = await asyncio.create_subprocess_exec(
         str(SCRIPTS_DIR / name),
         *args,
@@ -139,18 +114,13 @@ def _sse_output_fragment(job_id: str, output_id: str) -> str:
     # own hx-swap - "beforeend" here, so each message is appended rather
     # than replacing the previous ones. Keeps the same id as the original
     # placeholder (an outerHTML swap replaces the element entirely), so the
-    # form's hx-target selector still finds it on a second run.
-    return str(
-        pre(
-            f"#{output_id}.output",
-            **{
-                "hx-ext": "sse",
-                "sse-connect": f"/run/stream/{job_id}",
-                "sse-swap": "message",
-                "sse-close": "done",
-                "hx-swap": "beforeend",
-            },
-        )
+    # form's hx-target selector still finds it on a second run. job_id and
+    # output_id are both server-generated (uuid4 / a fixed literal), never
+    # user input, so no escaping is needed building this fragment.
+    return (
+        f'<pre id="{output_id}" class="output" hx-ext="sse" '
+        f'sse-connect="/run/stream/{job_id}" sse-swap="message" '
+        f'sse-close="done" hx-swap="beforeend"></pre>'
     )
 
 
@@ -171,6 +141,209 @@ async def _stream_job(job_id: str):
     _jobs.pop(job_id, None)
 
 
+def _interface_info(name: str) -> dict:
+    # Same tool view_currently_associated_clients.sh uses (nmcli device
+    # status) - queried per-device here instead of as one table, since we
+    # want specific fields (state, IP) rather than a printed block.
+    state_out = _run(["nmcli", "-g", "GENERAL.STATE", "device", "show", name]).strip()
+    if not state_out:
+        return {"name": name, "status": "not found", "ip": None}
+    match = re.search(r"\((.*?)\)", state_out)
+    status = (match.group(1) if match else state_out).upper()
+    ip_out = _run(["nmcli", "-g", "IP4.ADDRESS", "device", "show", name]).strip()
+    ip = ip_out.split("|")[0].split("/")[0] if ip_out else None
+    return {"name": name, "status": status, "ip": ip}
+
+
+def _ap_interfaces() -> list[str]:
+    # Same commands view_currently_associated_clients.sh uses to find the
+    # AP-mode interfaces (iw dev, looking for "type AP" entries).
+    aps = []
+    current = None
+    for line in _run(["iw", "dev"]).splitlines():
+        line = line.strip()
+        if line.startswith("Interface"):
+            current = line.split()[1]
+        elif line.startswith("type AP") and current:
+            aps.append(current)
+    return aps
+
+
+def _ap_band(iface: str) -> str:
+    info = _run(["iw", "dev", iface, "info"])
+    match = re.search(r"channel \d+ \((\d+) MHz\)", info)
+    if not match:
+        return "unknown band"
+    return "2.4G" if int(match.group(1)) < 3000 else "5G"
+
+
+def _mode() -> str:
+    # dual: both radios (IF_24/IF_5) broadcast the AP. uplink: only IF_5
+    # does (at whichever band was chosen - see setup_ap.sh), IF_24 is
+    # freed up as a Wi-Fi client instead.
+    aps = set(_ap_interfaces())
+    if IF_24 in aps and IF_5 in aps:
+        return "dual"
+    if IF_5 in aps:
+        return f"uplink on {_ap_band(IF_5)}"
+    return "unknown"
+
+
+def _connected_client_count() -> int:
+    # Same commands view_currently_associated_clients.sh uses to list
+    # clients (iw dev to find AP-mode interfaces, then station dump on
+    # each) - just counted here rather than printed in full.
+    return sum(
+        _run(["iw", "dev", ap, "station", "dump"]).count("Station ")
+        for ap in _ap_interfaces()
+    )
+
+
+def _wireguard_ip() -> str | None:
+    # No root needed for this (unlike the handshake info below) - "ip
+    # addr" just reads interface state, same as "ip link" already does
+    # for the interface table.
+    out = _run(["ip", "-4", "-o", "addr", "show", "wg0"])
+    match = re.search(r"inet (\S+)/", out)
+    return match.group(1) if match else None
+
+
+def _wireguard_peer_info() -> dict:
+    # "wg show" needs root, unlike everything else on this page - reuses
+    # view_wireguard_status.sh's own self-elevation (see _run_script)
+    # rather than the app sudo-ing directly, which isn't covered by the
+    # project's sudoers file (scoped to exact script paths - see the
+    # README). Parses the same human-readable lines "wg show" already
+    # prints (one script call covers both fields) rather than re-deriving
+    # them from "latest-handshakes"/"dump".
+    out = _run_script("view_wireguard_status.sh")
+    handshake = re.search(r"latest handshake:\s*(.+)", out)
+    endpoint = re.search(r"endpoint:\s*(\S+)", out)
+    return {
+        "handshake": handshake.group(1).strip() if handshake else "unknown",
+        "peer": endpoint.group(1) if endpoint else "not found",
+    }
+
+
+def host_info() -> dict:
+    ap_ifaces = set(_ap_interfaces())
+    ips = [
+        info
+        for name in INTERFACES
+        if name not in ap_ifaces
+        for info in [_interface_info(name)]
+        if info["ip"]
+    ]
+    return {
+        "name": socket.gethostname(),
+        "mode": _mode(),
+        "uptime": _run(["uptime", "-p"]).strip() or "unknown",
+        "ips": ips,
+    }
+
+
+def ap_info() -> dict:
+    return {
+        "ssid": SSID,
+        "ip": _interface_info(BR)["ip"],
+        "client_count": _connected_client_count(),
+    }
+
+
+def wireguard_info() -> dict:
+    return {
+        "ip": _wireguard_ip(),
+        **_wireguard_peer_info(),
+    }
+
+
+# The AP's own Wi-Fi password, doubling as this site's login password -
+# one shared secret rather than a separate site password to remember.
+PSK = os.environ.get("PSK", "")
+
+# Persisted so a service restart (e.g. a redeploy) doesn't invalidate every
+# existing login session - generated once, on first run.
+SECRET_FILE = BASE_DIR / ".session_secret"
+if SECRET_FILE.exists():
+    SESSION_SECRET = SECRET_FILE.read_text().strip()
+else:
+    SESSION_SECRET = secrets.token_hex(32)
+    SECRET_FILE.write_text(SESSION_SECRET)
+    SECRET_FILE.chmod(0o600)
+
+app = FastAPI()
+app.add_middleware(SessionMiddleware, secret_key=SESSION_SECRET, https_only=True)
+app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
+templates = Jinja2Templates(directory=BASE_DIR / "templates")
+
+
+@app.middleware("http")
+async def no_cache_static(request: Request, call_next):
+    # Without this, browsers can serve a stale /static/* file (site.css in
+    # particular) on a plain reload - only a hard refresh forces a
+    # re-fetch, since StaticFiles sends Last-Modified/ETag but no
+    # Cache-Control, leaving browsers free to use heuristic caching.
+    # "no-cache" still revalidates via ETag rather than skipping the cache
+    # entirely, so it stays cheap.
+    response = await call_next(request)
+    if request.url.path.startswith("/static/"):
+        response.headers["Cache-Control"] = "no-cache"
+    return response
+
+
+def require_login(request: Request) -> None:
+    if not request.session.get("authenticated"):
+        raise HTTPException(status_code=303, headers={"Location": "/login"})
+
+
+@app.get("/", response_class=HTMLResponse, dependencies=[Depends(require_login)])
+def index(request: Request):
+    context = {
+        "show_logout": True,
+        "host": host_info(),
+        "ap": ap_info(),
+        "wireguard": wireguard_info(),
+    }
+    return templates.TemplateResponse(request, "index.html", context)
+
+
+@app.get(
+    "/ap-details", response_class=HTMLResponse, dependencies=[Depends(require_login)]
+)
+def ap_details(request: Request):
+    return templates.TemplateResponse(
+        request,
+        "details.html",
+        {
+            "show_logout": True,
+            "heading": "AP Details",
+            "output": _run_script("view_currently_associated_clients.sh"),
+        },
+    )
+
+
+@app.get(
+    "/wireguard-details",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_login)],
+)
+def wireguard_details(request: Request):
+    return templates.TemplateResponse(
+        request,
+        "details.html",
+        {
+            "show_logout": True,
+            "heading": "WireGuard Details",
+            "output": _run_script("view_wireguard_status.sh"),
+        },
+    )
+
+
+@app.get("/manage", response_class=HTMLResponse, dependencies=[Depends(require_login)])
+def manage(request: Request):
+    return templates.TemplateResponse(request, "manage.html", {})
+
+
 @app.post(
     "/run/setup_ap", response_class=HTMLResponse, dependencies=[Depends(require_login)]
 )
@@ -179,8 +352,9 @@ async def start_setup_ap(mode: str = Form(...), band: str = Form("5")):
         raise HTTPException(status_code=400, detail="invalid mode")
     if band not in ("5", "2.4"):
         raise HTTPException(status_code=400, detail="invalid band")
-    job_id = await _start_job("setup_ap.sh", [mode, band])
-    return _sse_output_fragment(job_id, "setup-ap-output")
+    args = [mode, band] if mode == "uplink" else [mode]
+    job_id = await _start_job("setup_ap.sh", args)
+    return _sse_output_fragment(job_id, "job-output")
 
 
 @app.post(
@@ -193,7 +367,7 @@ async def start_uplink_wifi(ssid: str = Form(...), password: str = Form("")):
         raise HTTPException(status_code=400, detail="SSID required")
     args = [ssid, password] if password else [ssid]
     job_id = await _start_job("uplink_wifi.sh", args)
-    return _sse_output_fragment(job_id, "uplink-output")
+    return _sse_output_fragment(job_id, "job-output")
 
 
 @app.get("/run/stream/{job_id}", dependencies=[Depends(require_login)])
@@ -216,48 +390,9 @@ async def shutdown_pi():
     return "Shutting down now - this page will stop responding shortly."
 
 
-@app.get(
-    "/manage", response_class=HTMLResponse, dependencies=[Depends(require_login)]
-)
-def manage(request: Request):
-    return templates.TemplateResponse(
-        request, "manage.html", {"ssid": SSID, "show_logout": True}
-    )
-
-
-@app.get(
-    "/wireguard", response_class=HTMLResponse, dependencies=[Depends(require_login)]
-)
-def wireguard_status(request: Request):
-    return templates.TemplateResponse(
-        request,
-        "output.html",
-        {
-            "ssid": SSID,
-            "show_logout": True,
-            "heading": "WireGuard status",
-            "output": _run_script("view_wireguard_status.sh"),
-        },
-    )
-
-
-@app.get("/clients", response_class=HTMLResponse, dependencies=[Depends(require_login)])
-def clients(request: Request):
-    return templates.TemplateResponse(
-        request,
-        "output.html",
-        {
-            "ssid": SSID,
-            "show_logout": True,
-            "heading": "AP Status",
-            "output": _run_script("view_currently_associated_clients.sh"),
-        },
-    )
-
-
 @app.get("/login", response_class=HTMLResponse)
 def login_form(request: Request):
-    return templates.TemplateResponse(request, "login.html", {"ssid": SSID, "error": None})
+    return templates.TemplateResponse(request, "login.html", {"error": None})
 
 
 @app.post("/login", response_class=HTMLResponse)
@@ -268,7 +403,7 @@ def login(request: Request, password: str = Form(...)):
     return templates.TemplateResponse(
         request,
         "login.html",
-        {"ssid": SSID, "error": "Incorrect password"},
+        {"error": "Incorrect PassKey"},
         status_code=401,
     )
 
@@ -276,20 +411,25 @@ def login(request: Request, password: str = Form(...)):
 @app.post("/logout")
 def logout(request: Request):
     request.session.clear()
-    return RedirectResponse("/login", status_code=303)
+    return HTMLResponse("/login", status_code=204, headers={'HX-Redirect': '/login'})
 
 
 if __name__ == "__main__":
     import uvicorn
 
+    # Overridable for local dev (see dev_webapp.sh) - unset, these match
+    # the prod defaults exactly (0.0.0.0:443, no reload). Passed as an
+    # import string rather than the app object since uvicorn requires that
+    # form for reload=True to work.
     uvicorn.run(
-        app,
-        host="0.0.0.0",
+        "app:app",
+        host=os.environ.get("WEBAPP_HOST", "0.0.0.0"),
         # 443, the default HTTPS port - not privileged for this process
         # despite running as pi_user, not root: mnet-ap-webapp.service
         # grants just CAP_NET_BIND_SERVICE (see setup_webapp.sh), rather
         # than needing to run as root for this alone.
-        port=443,
-        ssl_certfile=str(BASE_DIR / "cert.pem"),
-        ssl_keyfile=str(BASE_DIR / "key.pem"),
+        port=int(os.environ.get("WEBAPP_PORT", "443")),
+        ssl_certfile=os.environ.get("WEBAPP_CERT", str(BASE_DIR / "cert.pem")),
+        ssl_keyfile=os.environ.get("WEBAPP_KEY", str(BASE_DIR / "key.pem")),
+        reload=os.environ.get("WEBAPP_RELOAD") == "1",
     )

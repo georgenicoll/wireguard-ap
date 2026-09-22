@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{{ ssid }} — {{ heading }}</title>
+  <title>mnet-ap — {{ heading }}</title>
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
   <link rel="stylesheet" href="/static/pico.min.css">
   <link rel="stylesheet" href="/static/site.css">
@@ -11,16 +11,19 @@
 </head>
 <body>
   {% include "_header.html" %}
+  {% include "_nav.html" %}
   <main>
-    <h2>{{ heading }}</h2>
-    <pre>{{ output }}</pre>
+    <article>
+      <header>{{ heading }}</header>
+      <pre id="script-output" class="output">{{ output }}</pre>
+      <a role="button"
+         href="{{ request.url.path }}"
+         hx-select="#script-output"
+         hx-target="#script-output"
+         hx-swap="outerHTML"
+         hx-disabled-elt="this"
+         class="secondary">Refresh</a>
+    </article>
   </main>
-  <footer style="display: flex; gap: 0.75rem;">
-    <a href="/" role="button" class="outline secondary">&larr; Back</a>
-    <button hx-get="{{ request.url.path }}" hx-select="pre" hx-target="pre" hx-swap="outerHTML"
-      hx-disabled-elt="this" class="outline secondary">
-      Refresh
-    </button>
-  </footer>
 </body>
 </html>

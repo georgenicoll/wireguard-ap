@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{{ ssid }}</title>
+  <title>mnet-ap</title>
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
   <link rel="stylesheet" href="/static/pico.min.css">
   <link rel="stylesheet" href="/static/site.css">
@@ -11,18 +11,40 @@
 </head>
 <body>
   {% include "_header.html" %}
+  {% if show_logout %}{% include "_nav.html" %}{% endif %}
   <main>
-    <h2>{{ ssid }}</h2>
-    <div hx-get="/api/hostinfo" hx-trigger="load">
-      Loading&hellip;
+    <!-- Rough dump for now - just getting the data on the page, layout TBD. -->
+    <div class="cards">
+    <article>
+      <header>Host</header>
+      <div class="stat-grid">
+        <div class="stat"><div class="stat-label">Name</div><div class="stat-value">{{ host.name }}</div></div>
+        <div class="stat"><div class="stat-label">Mode</div><div class="stat-value">{{ host.mode }}</div></div>
+        <div class="stat"><div class="stat-label">Uptime</div><div class="stat-value">{{ host.uptime }}</div></div>
+        {% for iface in host.ips %}
+        <div class="stat"><div class="stat-label">IP ({{ iface.name }})</div><div class="stat-value">{{ iface.ip }}</div></div>
+        {% endfor %}
+      </div>
+    </article>
+
+    <article>
+      <header>AP</header>
+      <div class="stat-grid">
+        <div class="stat"><div class="stat-label">SSID</div><div class="stat-value">{{ ap.ssid }}</div></div>
+        <div class="stat"><div class="stat-label">IP</div><div class="stat-value">{{ ap.ip or "not found" }}</div></div>
+        <div class="stat"><div class="stat-label">Attached clients</div><div class="stat-value">{{ ap.client_count }}</div></div>
+      </div>
+    </article>
+
+    <article>
+      <header>WireGuard</header>
+      <div class="stat-grid">
+        <div class="stat"><div class="stat-label">IP</div><div class="stat-value">{{ wireguard.ip or "not found" }}</div></div>
+        <div class="stat"><div class="stat-label">Peer</div><div class="stat-value">{{ wireguard.peer }}</div></div>
+        <div class="stat"><div class="stat-label">Last handshake</div><div class="stat-value">{{ wireguard.handshake }}</div></div>
+      </div>
+    </article>
     </div>
-    <nav>
-      <ul>
-        <li><a href="/wireguard" role="button">WireGuard status</a></li>
-        <li><a href="/clients" role="button">AP Status</a></li>
-        <li><a href="/manage" role="button">Manage AP</a></li>
-      </ul>
-    </nav>
   </main>
 </body>
 </html>
