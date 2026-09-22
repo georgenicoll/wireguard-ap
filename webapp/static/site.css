@@ -1,19 +1,279 @@
 /* Shared across all pages (see templates/_header.html) - kept separate
    from pico.min.css (vendored, third-party) so it's obviously ours. */
-header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem; }
-header h1 { margin: 0; }
-header h1 a { text-decoration: none; color: inherit; }
-header form { margin: 0; }
 
-/* Reuses Pico's own "delete" color token (also used for the login error
-   message) rather than a hardcoded color, so it stays consistent with
-   Pico's theme, light/dark mode included. Used for the logout button and
-   any other destructive/irreversible action (e.g. shutdown).
-   Sets the actual rendered properties directly rather than overriding
-   Pico's --pico-secondary-* custom properties: Pico's precompiled CSS
-   doesn't consistently reference those on every state (notably hover),
-   so that approach silently didn't render red. This does, since site.css
-   loads after pico.min.css and wins on normal cascade order alone. */
+/* Scoped to body>header specifically (not the bare "header" element) -
+   article>header (the Host/AP/WireGuard card titles) is a different
+   thing and shouldn't get this flex layout too. */
+body > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  /* Pico gives body>header its own bottom padding *and* body>main its
+     own top padding (see pico.min.css's shared header/main/footer
+     container rule) - those stack into a large gap otherwise. */
+  padding-bottom: 0.5rem;
+}
+body > header form {
+  margin: 0;
+}
+body > main {
+  padding-top: 0.5rem;
+}
+
+/* Standard pattern for a label + field (+ optional button) on one line,
+   vertically centered so the label text lines up with the middle of the
+   field/button rather than their tops. Use this wherever a label and its
+   input sit on the same line, not just here. */
+.field-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.field-row label,
+.field-row input,
+.field-row select,
+.field-row textarea,
+.field-row button {
+  /* Pico gives label, input and [type=submit] each a different bottom
+     margin (the [type=submit] rule even beats Pico's own
+     button{margin-bottom:0} reset by specificity) - align-items: center
+     centers each item's full margin box, so that mismatch throws off
+     the centering unless it's reset to the same value (0) here. */
+  margin: 0;
+}
+.field-row input,
+.field-row select,
+.field-row textarea {
+  flex: 1;
+  width: auto;
+}
+.field-row button {
+  /* Pico's [type=submit] rule sets width:100%, which becomes this
+     item's flex-basis (auto resolves via width) - without overriding it,
+     a lone button in a row has nothing to force it to shrink back down
+     (it only "worked" on rows that also had a flex:1 field competing for
+     space, which isn't a real fix). */
+  flex: none;
+  width: auto;
+}
+.field-row input,
+.field-row select,
+.field-row textarea,
+.field-row button {
+  /* Pico sizes both via this variable (vertical padding), so shrinking
+     it here shortens the field and button together without upsetting
+     the margin-box centering fixed above. */
+  --pico-form-element-spacing-vertical: 0.35rem;
+}
+
+/* Login page specifically: a grid (rather than field-row's flex) so the
+   error message above the form can share the input's column and line up
+   with it on the left, whatever width the label ends up being. The form
+   itself becomes display:contents so its children (label/input/button)
+   join this grid directly as if the <form> wrapper weren't there -
+   field-row's own rules (margin resets etc.) still apply to them via the
+   descendant selectors below, since those don't care about the form's
+   own display. */
+.login-grid {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  column-gap: 0.5rem;
+  row-gap: 0.15rem;
+  max-width: 24rem;
+}
+.login-grid .error {
+  grid-column: 2;
+  grid-row: 1;
+  /* Pico's default <p> bottom margin would otherwise stack on top of
+     row-gap above, pushing the field further down than intended. */
+  margin: 0;
+}
+.login-grid label {
+  grid-column: 1;
+  grid-row: 2;
+}
+.login-grid input {
+  grid-column: 2;
+  grid-row: 2;
+}
+.login-grid button {
+  grid-column: 3;
+  grid-row: 2;
+}
+form.login-form {
+  display: contents;
+}
+
+/* The nav bar below the header just holds page-to-page buttons - kept as
+   small as possible rather than Pico's default block padding
+   (var(--pico-spacing) top/bottom, a full rem or more). Scoped to
+   body>nav specifically so a <nav> used some other way elsewhere
+   wouldn't automatically pick this up. justify-content overrides Pico's
+   own nav{justify-content:space-between} - that spreads items across
+   the full width (logo-left/cta-right style), not the clustered-together
+   look these buttons want. */
+body > nav {
+  display: flex;
+  justify-content: flex-start;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  padding-bottom: 0.5rem;
+}
+
+/* body>header/body>main aren't just padded - Pico centers them as a
+   progressively wider, narrower-than-the-viewport column at each
+   breakpoint (width:100% + margin:auto + a max-width that grows with
+   the viewport - see pico.min.css's shared container rule and its
+   @media blocks). nav isn't part of that rule, so it stayed flush with
+   the viewport edges while header/main sat inset - replicating the same
+   width/margin/max-width steps here (values copied from pico.min.css)
+   is what actually lines its left edge up with theirs, not padding. */
+body > nav {
+  width: 100%;
+  margin-right: auto;
+  margin-left: auto;
+  padding-right: var(--pico-block-spacing-horizontal);
+  padding-left: var(--pico-block-spacing-horizontal);
+}
+@media (min-width: 576px) {
+  body > nav {
+    max-width: 510px;
+    padding-right: 0;
+    padding-left: 0;
+  }
+}
+@media (min-width: 768px) {
+  body > nav {
+    max-width: 700px;
+  }
+}
+@media (min-width: 1024px) {
+  body > nav {
+    max-width: 950px;
+  }
+}
+@media (min-width: 1280px) {
+  body > nav {
+    max-width: 1200px;
+  }
+}
+@media (min-width: 1536px) {
+  body > nav {
+    max-width: 1450px;
+  }
+}
+body > nav form {
+  margin: 0;
+}
+body > nav button,
+body > nav [role=button],
+article [role=button] {
+  --pico-form-element-spacing-vertical: 0.2rem;
+  --pico-form-element-spacing-horizontal: 0.6rem;
+  font-size: 0.8rem;
+}
+
+/* The current page's own nav button - shown rather than hidden (so the
+   set of buttons doesn't jump around page to page), but inert: no href/
+   hx-post on it (see _nav.html), pointer-events removed as a second line
+   of defense, and dimmed + aria-disabled so it *looks* unavailable too. */
+.disabled {
+  pointer-events: none;
+  opacity: 0.5;
+}
+
+/* Overrides Pico's default <pre> background (--pico-code-background-color)
+   so the banner blends into the page instead of sitting in its own block. */
+.banner {
+  background: transparent;
+}
+
+/* Pico doesn't set an explicit width on a plain <article> (only on
+   dialog>article, a modal, which is unrelated) - it's just a block
+   element, so it naturally stretches to fill <main>. Side by side here
+   instead, each sized to its own content (a flex item's default) and
+   wrapping to the next line if the viewport's too narrow for all three. */
+.cards {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 1rem;
+}
+
+/* Script/job output panes (Manage's setup_ap.sh/uplink_wifi.sh streams,
+   and the AP/WireGuard Details pages) - capped height with its own
+   scrollbar rather than growing the page indefinitely, and wrapped so a
+   long line doesn't force horizontal scrolling too. */
+.output {
+  min-height: 3rem;
+  max-height: 20rem;
+  overflow-y: auto;
+  white-space: pre-wrap;
+}
+
+/* Right-aligns a trailing action button within its card/form, without
+   pulling the labels/fields above it (a plain <form> or <article>) over
+   too - scoped to just this wrapper rather than the whole block. */
+.actions {
+  text-align: right;
+}
+
+/* Stat tiles (Host/AP/WireGuard) - small muted label above a bolder
+   value, a few per card. auto-fit/minmax lets short values (a status
+   word, a client count) sit two-up while long ones (an uptime string)
+   claim a full row on their own. */
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+  gap: 1rem;
+}
+.stat-label {
+  font-size: 0.75rem;
+  color: var(--pico-muted-color);
+}
+.stat-value {
+  font-weight: 600;
+}
+
+/* This vendored pico.min.css build (see the "Web UI" section of the
+   README) doesn't ship the .secondary/.outline/.contrast button-variant
+   classes Pico's docs describe - only the color tokens they'd use remain
+   (--pico-secondary*, --pico-del-color, ...). So these are hand-built
+   here instead: outlined (transparent background, colored border/text)
+   and filled on hover/focus, same look Pico's own classes would give.
+   !important beats [type=submit]'s own color rules, which otherwise win
+   on specificity regardless of source order. */
+.secondary {
+  color: var(--pico-secondary) !important;
+  border-color: var(--pico-secondary) !important;
+  background: transparent !important;
+}
+.secondary:hover,
+.secondary:focus {
+  color: var(--pico-secondary-inverse, #fff) !important;
+  background: var(--pico-secondary-background) !important;
+  border-color: var(--pico-secondary-border) !important;
+}
+
+/* Error text (e.g. the login page's "Incorrect password") - Pico would
+   color this automatically via its [aria-invalid=true]+small selector,
+   but that requires the message to be the field's very next sibling,
+   which doesn't fit our field-row layout (label/input/button share one
+   line). Using the same --pico-del-color token directly instead, so it
+   still matches Pico's invalid-state color. The red exclamation mark on
+   the field itself comes for free from Pico's [aria-invalid=true] rule
+   once that attribute is set on the input - no extra CSS needed here. */
+.error {
+  color: var(--pico-del-color);
+  font-size: 0.8rem;
+}
+
+/* Same pattern as .secondary above, using Pico's "delete" color token
+   instead - for the logout button and any other destructive/irreversible
+   action (e.g. shutdown). */
 .danger {
   color: var(--pico-del-color) !important;
   border-color: var(--pico-del-color) !important;

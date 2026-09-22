@@ -1,0 +1,27 @@
+<nav>
+  {% if request.url.path == "/" %}
+  <a role="button" class="secondary disabled" aria-disabled="true"><< Home</a>
+  {% else %}
+  <a href="/" role="button" class="secondary"><< Home</a>
+  {% endif %}
+
+  {% if request.url.path == "/ap-details" %}
+  <a role="button" class="secondary disabled" aria-disabled="true">AP Details</a>
+  {% else %}
+  <a href="/ap-details" role="button" class="secondary">AP Details</a>
+  {% endif %}
+
+  {% if request.url.path == "/wireguard-details" %}
+  <a role="button" class="secondary disabled" aria-disabled="true">WireGuard Details</a>
+  {% else %}
+  <a href="/wireguard-details" role="button" class="secondary">WireGuard Details</a>
+  {% endif %}
+
+  {% if request.url.path == "/manage" %}
+  <a role="button" class="secondary disabled" aria-disabled="true">Manage</a>
+  {% else %}
+  <a href="/manage" role="button" class="secondary">Manage</a>
+  {% endif %}
+
+  <a hx-post="/logout" role="button" class="secondary">Log out</a>
+</nav>

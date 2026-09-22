@@ -404,6 +404,24 @@ https://<pi_host>/       # or https://<ap_ip>/ once joined to the AP - also link
   after a reboot, or a redeploy that doesn't touch the dependency block)
   don't.
 
+### Local development
+
+`./dev_webapp.sh` runs the web UI locally with hot reload, so UI changes
+(templates, `static/`, `app.py`) can be iterated on without deploying to
+the Pi each time. It generates a `webapp/dev-cert.pem`/`dev-key.pem`
+self-signed cert for `localhost` (gitignored, separate from the Pi's own
+`cert.pem`/`key.pem`), sets a dummy `SSID`/`PSK` (override by exporting
+`PSK` beforehand), and serves on `https://127.0.0.1:8443/` via
+`uv run app.py` with `uvicorn --reload` enabled. The login password is
+printed to the console on startup.
+
+The "Run setup" buttons and the status/shutdown pages won't work locally -
+they shell out to `scripts/*.sh`, which self-elevate via `sudo` and touch
+real network interfaces (hostapd, nftables, etc.), and aren't even at the
+path `app.py` looks for them locally (see `SCRIPTS_DIR`'s comment). This
+is for iterating on layout/styling/flow, not exercising the Pi-side
+scripts.
+
 ## Notes
 
 - `psk` is marked `sensitive`, but it still ends up in OpenTofu state because
