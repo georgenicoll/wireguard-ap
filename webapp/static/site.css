@@ -57,16 +57,6 @@ body > main {
   flex: none;
   width: auto;
 }
-.field-row input,
-.field-row select,
-.field-row textarea,
-.field-row button {
-  /* Pico sizes both via this variable (vertical padding), so shrinking
-     it here shortens the field and button together without upsetting
-     the margin-box centering fixed above. */
-  --pico-form-element-spacing-vertical: 0.35rem;
-}
-
 /* Login page specifically: a grid (rather than field-row's flex) so the
    error message above the form can share the input's column and line up
    with it on the left, whatever width the label ends up being. The form
@@ -98,7 +88,7 @@ body > main {
   grid-column: 2;
   grid-row: 2;
 }
-.login-grid button {
+.login-grid [role=button] {
   grid-column: 3;
   grid-row: 2;
 }
@@ -168,12 +158,31 @@ body > nav {
 body > nav form {
   margin: 0;
 }
-body > nav button,
-body > nav [role=button],
-article [role=button] {
+/* Every button-styled element, site-wide - kept small rather than
+   Pico's default block padding. Started out scoped to nav/article/
+   login-grid, but that list kept growing every time a button turned up
+   somewhere new (e.g. the shutting-down page's lone "Go to login"
+   link) - every button in this app is meant to look this way, so this
+   is simpler and won't miss the next one too. */
+button,
+[role=button] {
   --pico-form-element-spacing-vertical: 0.2rem;
   --pico-form-element-spacing-horizontal: 0.6rem;
   font-size: 0.8rem;
+}
+
+/* Every text-type input and select, site-wide - shrunk from Pico's
+   spacious default to match the compact buttons above. Checkboxes/
+   radios are excluded; they don't use this padding/height model, so
+   there's nothing to shrink. Height needs its own override on top of
+   the padding/font-size drop - pico.min.css's input height formula is
+   hardcoded to 1rem regardless of the element's own font-size, so it
+   ignores the font-size change here otherwise. */
+input:not([type=checkbox], [type=radio], [type=range]),
+select {
+  --pico-form-element-spacing-vertical: 0.2rem;
+  font-size: 0.8rem;
+  height: auto;
 }
 
 /* The current page's own nav button - shown rather than hidden (so the
@@ -284,4 +293,24 @@ article [role=button] {
   color: var(--pico-contrast, #fff) !important;
   background: var(--pico-del-color) !important;
   border-color: var(--pico-del-color) !important;
+}
+
+/* Same pattern again, for actions that are disruptive but not
+   destructive like .danger's (e.g. restart, which comes back on its
+   own) - yellow rather than red. No --pico-warning-color token exists
+   in this vendored Pico build (only del/primary/secondary get one), so
+   this is a plain hardcoded yellow instead of a token reference. The
+   hover text is dark rather than the white .danger/.secondary use for
+   their hover state - this yellow is light enough that white text on
+   top of it stops being readable. */
+.warning {
+  color: #eab308 !important;
+  border-color: #eab308 !important;
+  background: transparent !important;
+}
+.warning:hover,
+.warning:focus {
+  color: #422006 !important;
+  background: #eab308 !important;
+  border-color: #eab308 !important;
 }

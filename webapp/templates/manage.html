@@ -54,15 +54,23 @@
 
     <article>
       <header>Danger zone</header>
-      <p>Powers off the Pi immediately. You'll need physical access (or a
-        smart plug/remote power switch) to turn it back on.</p>
+      <h4>Restart</h4>
+      <p>Reboots the Pi. It should come back on its own.</p>
+      <p class="actions">
+        <a role="button" class="warning"
+          onclick="document.getElementById('restart-dialog').showModal()">
+          Restart the Pi
+        </a>
+      </p>
+      <h4>Shutdown</h4>
+      <p>Powers off the Pi. You'll need physical access (or a smart
+        plug/remote power switch) to turn it back on.</p>
       <p class="actions">
         <a role="button" class="danger"
           onclick="document.getElementById('shutdown-dialog').showModal()">
           Shut down the Pi
         </a>
       </p>
-      <p id="shutdown-status"></p>
     </article>
     </div>
   </main>
@@ -78,6 +86,20 @@
     </article>
   </dialog>
 
+  <dialog id="restart-dialog">
+    <article>
+      <h3>Restart the Pi?</h3>
+      <p>It should come back on its own after rebooting.</p>
+      <footer>
+        <a role="button" class="secondary"
+          onclick="document.getElementById('restart-dialog').close()">Cancel</a>
+        <a role="button" class="warning" hx-post="/restart">
+          Restart
+        </a>
+      </footer>
+    </article>
+  </dialog>
+
   <dialog id="shutdown-dialog">
     <article>
       <h3>Shut down the Pi?</h3>
@@ -86,8 +108,7 @@
       <footer>
         <a role="button" class="secondary"
           onclick="document.getElementById('shutdown-dialog').close()">Cancel</a>
-        <a role="button" class="danger" hx-post="/shutdown" hx-target="#shutdown-status" hx-swap="innerHTML"
-          hx-on::after-request="document.getElementById('shutdown-dialog').close()">
+        <a role="button" class="danger" hx-post="/shutdown">
           Shut down
         </a>
       </footer>

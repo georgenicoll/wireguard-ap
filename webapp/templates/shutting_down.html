@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>mnet-ap — shutting down</title>
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+  <link rel="stylesheet" href="/static/pico.min.css">
+  <link rel="stylesheet" href="/static/site.css">
+</head>
+<body>
+  {% include "_header.html" %}
+  <main>
+    {% if restarting %}
+    <p>Restarting the Pi. Once it's back up, this page will take you
+      back to the login page automatically.</p>
+    {% else %}
+    <p>Shutting down the Pi. If it comes back up, this page will take you
+      back to the login page automatically.</p>
+    {% endif %}
+    <p><a role="button" class="secondary" href="/login">Go to login</a></p>
+  </main>
+  <script>
+    // Waits out the Pi actually going down before the first check -
+    // polling immediately would just catch this same still-running
+    // server. Every poll after that is spaced out too, so a Pi that's
+    // left off for a while doesn't get hammered with requests once it's
+    // finally back.
+    const POLL_DELAY_MS = 10000;
+
+    function pollHealth() {
+      fetch("/healthz", { cache: "no-store" })
+        .then((response) => {
+          if (response.ok) {
+            window.location.href = "/login";
+          } else {
+            setTimeout(pollHealth, POLL_DELAY_MS);
+          }
+        })
+        .catch(() => setTimeout(pollHealth, POLL_DELAY_MS));
+    }
+
+    setTimeout(pollHealth, POLL_DELAY_MS);
+  </script>
+</body>
+</html>

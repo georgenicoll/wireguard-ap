@@ -13,11 +13,11 @@
   <main>
     <div class="login-grid">
       {% if error %}<p class="error">{{ error }}</p>{% endif %}
-      <form method="post" action="/login" class="field-row login-form">
+      <form method="post" action="/login" class="field-row login-form" id="login-form">
         <label for="password">PassKey:</label>
         <input type="password" id="password" name="password" autofocus
           {% if error %}aria-invalid="true"{% endif %}>
-        <button type="submit">Login</button>
+        <a role="button" class="secondary" onclick="document.getElementById('login-form').requestSubmit()">Login</a>
       </form>
     </div>
   </main>
