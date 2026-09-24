@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Sets up and runs the mnet-ap web UI (FastAPI + htmx) as a systemd service.
+# Sets up and runs the mnh-ap web UI (FastAPI + htmx) as a systemd service.
 # Dependencies aren't installed separately - app.py declares them itself via
 # PEP 723 inline script metadata, and "uv run app.py" resolves/caches an
 # environment for them on the fly. Safe to re-run: restarts the service
@@ -36,9 +36,9 @@ if [[ ! -f $CERT || ! -f $KEY ]]; then
     -subj "/CN=${AP_IP}" -addext "subjectAltName=IP:${AP_IP}"
 fi
 
-tee /etc/systemd/system/mnet-ap-webapp.service >/dev/null <<EOF
+tee /etc/systemd/system/mnh-ap-webapp.service >/dev/null <<EOF
 [Unit]
-Description=mnet-ap web UI
+Description=mnh-ap web UI
 After=network.target
 
 [Service]
@@ -62,5 +62,5 @@ WantedBy=multi-user.target
 EOF
 
 systemctl daemon-reload
-systemctl enable mnet-ap-webapp.service
-systemctl restart mnet-ap-webapp.service
+systemctl enable mnh-ap-webapp.service
+systemctl restart mnh-ap-webapp.service

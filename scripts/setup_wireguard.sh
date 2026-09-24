@@ -24,7 +24,7 @@ systemctl restart wg-quick@wg0
 # rules (SSH/management access into the Pi itself, which stays on the
 # interface it arrived on regardless of this) - i.e. AP clients' own
 # traffic, and any new connection the Pi itself initiates. See README.
-tee /usr/local/sbin/mnet-ap-wg-route-precedence.sh >/dev/null <<'SCRIPT'
+tee /usr/local/sbin/mnh-ap-wg-route-precedence.sh >/dev/null <<'SCRIPT'
 #!/usr/bin/env bash
 # Re-run whenever wg0 comes up and on every NetworkManager event (a DHCP
 # renewal on eth0/wlan0 can reinstall its connected route at the default
@@ -46,15 +46,15 @@ while IFS= read -r prefix; do
     done < <(ip route show to exact "$prefix" | awk '{for (i=1;i<=NF;i++) if ($i=="dev") print $(i+1)}')
 done < <(ip route show dev wg0 | awk '{print $1}')
 SCRIPT
-chmod 755 /usr/local/sbin/mnet-ap-wg-route-precedence.sh
+chmod 755 /usr/local/sbin/mnh-ap-wg-route-precedence.sh
 
-tee /etc/NetworkManager/dispatcher.d/90-mnet-ap-wg-route-precedence >/dev/null <<'EOF'
+tee /etc/NetworkManager/dispatcher.d/90-mnh-ap-wg-route-precedence >/dev/null <<'EOF'
 #!/usr/bin/env bash
-exec /usr/local/sbin/mnet-ap-wg-route-precedence.sh
+exec /usr/local/sbin/mnh-ap-wg-route-precedence.sh
 EOF
-chmod 755 /etc/NetworkManager/dispatcher.d/90-mnet-ap-wg-route-precedence
+chmod 755 /etc/NetworkManager/dispatcher.d/90-mnh-ap-wg-route-precedence
 
-/usr/local/sbin/mnet-ap-wg-route-precedence.sh
+/usr/local/sbin/mnh-ap-wg-route-precedence.sh
 
 # --- re-resolve the peer's endpoint hostname once its handshake goes stale --
 # Ported from OpenWRT's wireguard_watchdog (Jason A. Donenfeld / Aleksandr V.
@@ -66,7 +66,7 @@ chmod 755 /etc/NetworkManager/dispatcher.d/90-mnet-ap-wg-route-precedence
 # host:port" updates just that peer in place - no interface restart, no
 # route flap - unlike this file's own DNS change, which does need a
 # restart because it's *this Pi's* address that changed, not the peer's.
-tee /usr/local/sbin/mnet-ap-wg-watchdog.sh >/dev/null <<'SCRIPT'
+tee /usr/local/sbin/mnh-ap-wg-watchdog.sh >/dev/null <<'SCRIPT'
 #!/usr/bin/env bash
 set -euo pipefail
 IFACE=wg0
@@ -91,24 +91,24 @@ for peer in $(wg show "$IFACE" peers 2>/dev/null); do
   idle=$(($(date +%s) - last_handshake))
   ((idle < STALE_AFTER)) && continue
 
-  logger -t mnet-ap-wg-watchdog "$IFACE endpoint $host:$port idle ${idle}s, re-resolving"
+  logger -t mnh-ap-wg-watchdog "$IFACE endpoint $host:$port idle ${idle}s, re-resolving"
   wg set "$IFACE" peer "$peer" endpoint "$host:$port"
 done
 SCRIPT
-chmod 755 /usr/local/sbin/mnet-ap-wg-watchdog.sh
+chmod 755 /usr/local/sbin/mnh-ap-wg-watchdog.sh
 
-tee /etc/systemd/system/mnet-ap-wg-watchdog.service >/dev/null <<'EOF'
+tee /etc/systemd/system/mnh-ap-wg-watchdog.service >/dev/null <<'EOF'
 [Unit]
 Description=Re-resolve wg0's peer endpoint if its handshake goes stale
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/sbin/mnet-ap-wg-watchdog.sh
+ExecStart=/usr/local/sbin/mnh-ap-wg-watchdog.sh
 EOF
 
-tee /etc/systemd/system/mnet-ap-wg-watchdog.timer >/dev/null <<'EOF'
+tee /etc/systemd/system/mnh-ap-wg-watchdog.timer >/dev/null <<'EOF'
 [Unit]
-Description=Run mnet-ap-wg-watchdog every minute
+Description=Run mnh-ap-wg-watchdog every minute
 
 [Timer]
 OnBootSec=1min
@@ -119,4 +119,4 @@ WantedBy=timers.target
 EOF
 
 systemctl daemon-reload
-systemctl enable --now mnet-ap-wg-watchdog.timer
+systemctl enable --now mnh-ap-wg-watchdog.timer

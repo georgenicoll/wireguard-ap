@@ -228,10 +228,10 @@ change.
 record of having deployed there — there's no destroy-time provisioner, so
 `hostapd`, `dnsmasq`, the NAT rule, the bridge and the uploaded scripts are
 left exactly as they were. To actually disable the AP, SSH in and stop/disable
-the relevant units by hand (`mnet-hostapd@*`, `dnsmasq`, `mnet-ap-nat`,
-`mnet-ap-local-routing`, `mnet-ap-wg-watchdog.timer`, `mnet-ap-webapp`), and
+the relevant units by hand (`mnh-hostapd@*`, `dnsmasq`, `mnh-ap-nat`,
+`mnh-ap-local-routing`, `mnh-ap-wg-watchdog.timer`, `mnh-ap-webapp`), and
 remove
-`/etc/NetworkManager/dispatcher.d/90-mnet-ap-wg-route-precedence` if you also
+`/etc/NetworkManager/dispatcher.d/90-mnh-ap-wg-route-precedence` if you also
 want the `wg0` route-precedence fix gone, or ask for a destroy-time
 provisioner to be added if you want `destroy` to do that automatically.
 
@@ -260,14 +260,14 @@ provisioner to be added if you want `destroy` to do that automatically.
   dynamic DNS (`dynu_hostname`), which can change - but `wg-quick` only
   resolves `Endpoint` once, at startup, so the tunnel would otherwise keep
   silently talking to a stale address until something re-resolves it.
-  `mnet-ap-wg-watchdog.sh`, run every minute by
-  `mnet-ap-wg-watchdog.timer`, is a port of OpenWRT's own
+  `mnh-ap-wg-watchdog.sh`, run every minute by
+  `mnh-ap-wg-watchdog.timer`, is a port of OpenWRT's own
   `wireguard_watchdog` (Jason A. Donenfeld / Aleksandr V. Piskunov,
   GPL-2.0 - see `/usr/bin/wireguard_watchdog` on an OpenWRT router): once
   `wg0`'s handshake has been stale for more than 150s, it re-resolves the
   peer's hostname in place via `wg set wg0 peer <key> endpoint host:port` -
   no interface restart, no route flap. (This is separate from
-  `mnet-ap-wg-route-precedence.sh`'s NetworkManager dispatcher hook, which
+  `mnh-ap-wg-route-precedence.sh`'s NetworkManager dispatcher hook, which
   handles *this Pi's own* address changing, not the peer's.)
 
   **Known, accepted trade-off**: if a peer's routed LAN (e.g. another site's
@@ -283,14 +283,14 @@ provisioner to be added if you want `destroy` to do that automatically.
   - **Connections into the Pi itself** (SSH, mainly) always keep replying via
     the interface they arrived on, regardless of any colliding route -
     `setup_forwarding_and_nat.sh` sets up policy routing for this (a
-    `mnet_ap_route` nftables table plus
-    `/usr/local/sbin/mnet-ap-local-routing.sh`), keyed on arrival interface
+    `mnh_ap_route` nftables table plus
+    `/usr/local/sbin/mnh-ap-local-routing.sh`), keyed on arrival interface
     rather than on any peer's registered subnet, so it protects management
     access generically against any current or future peer collision without
     needing to know about peer LANs at all.
   - **Everything else** - AP clients' own traffic, and any new connection the
     Pi itself initiates - deliberately prefers `wg0`:
-    `mnet-ap-wg-route-precedence.sh` (run after `wg-quick up` and on every
+    `mnh-ap-wg-route-precedence.sh` (run after `wg-quick up` and on every
     NetworkManager event, to survive a DHCP renewal resetting things) forces
     any `wg0` route to win over a colliding connected-interface route by
     metric, rather than leaving the kernel to pick unpredictably. This means
@@ -330,6 +330,15 @@ baked into the initial HTML, plus links to two status pages:
   the same `view_currently_associated_clients.sh` used from the CLI (see
   "What gets configured on the Pi" below). Always runs it without `--ssh`
   (SSH session details aren't exposed here).
+- **`/diagnostics`** — one card per command that `diagnostics.sh --show-commands`
+  lists (name, description, one text box per parameter, a Run button); Run
+  calls `diagnostics.sh --run-command <name> <args...>` and streams the output
+  into a modal the same way `/manage` does. The page knows nothing about
+  specific commands: to add one, write a `cmd_<name>` function in
+  `scripts/diagnostics.sh` and `register` it. The script runs as the web
+  user (no sudo), validates its own arguments, and the app only ever passes
+  them to it as separate exec args (never via a shell), for commands the
+  script itself advertised.
 - **`/manage`** — runs `setup_ap.sh`/`uplink_wifi.sh` with parameters chosen
   in the browser (mode, band, upstream SSID/password) and streams their
   output live rather than just showing a final result, using htmx's
@@ -364,7 +373,7 @@ https://<pi_host>/       # or https://<ap_ip>/ once joined to the AP - also link
 - **`setup_webapp.sh`** installs [uv](https://docs.astral.sh/uv/) system-wide
   (`/usr/local/bin`, so it's on `PATH` for both this script and the service
   below, whichever user runs each), then runs `webapp/app.py` as
-  `mnet-ap-webapp.service` via `uv run app.py`. There's no `requirements.txt`
+  `mnh-ap-webapp.service` via `uv run app.py`. There's no `requirements.txt`
   or venv to manage by hand: `app.py` declares its own dependencies with
   [PEP 723](https://peps.python.org/pep-0723/) inline script metadata (the
   `# /// script ... ///` block at the top), and `uv run` resolves and caches
@@ -374,7 +383,7 @@ https://<pi_host>/       # or https://<ap_ip>/ once joined to the AP - also link
   AP's own Wi-Fi, and `wg0` alike. Binding the default HTTPS port without
   being root comes from `CAP_NET_BIND_SERVICE`, granted to just this
   service via `AmbientCapabilities=`/`CapabilityBoundingSet=` in
-  `mnet-ap-webapp.service` - not from running as root.
+  `mnh-ap-webapp.service` - not from running as root.
 - **HTTPS, self-signed**: `setup_webapp.sh` generates `webapp/cert.pem` /
   `webapp/key.pem` with `openssl` the first time it runs (left alone on
   later runs, so redeploys don't force the browser to re-trust it). There's
@@ -388,7 +397,7 @@ https://<pi_host>/       # or https://<ap_ip>/ once joined to the AP - also link
   on first run and kept, so a redeploy doesn't log everyone out.
 - **SSID-branded, not hardcoded**: the page title/heading show the AP's
   actual configured SSID rather than a fixed name. `SSID` and `PSK` reach
-  the app via `EnvironmentFile=` in `mnet-ap-webapp.service`, pointing at
+  the app via `EnvironmentFile=` in `mnh-ap-webapp.service`, pointing at
   the same `wireguard-ap.env` the shell scripts already source - no
   separate config to maintain.
 - **htmx is vendored** (`webapp/static/htmx.min.js`, `htmx-ext-sse.js`), not

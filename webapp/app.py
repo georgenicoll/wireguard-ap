@@ -14,6 +14,7 @@ import logging
 import os
 import re
 import secrets
+import signal
 import socket
 import subprocess
 import uuid
@@ -92,9 +93,17 @@ def _run_script(name: str, timeout: float = 10) -> str:
 # EventSource opened) leaks its dict entry until the process exits, but
 # never runs longer than the underlying script does.
 _jobs: dict[str, asyncio.subprocess.Process] = {}
+# Jobs to interrupt (Ctrl+C) if their output stream goes away before they
+# finish - the browser closed the output dialog or left the page. Opt-in:
+# for setup_ap.sh and friends a closed tab must *not* stop a half-applied
+# network change, whereas an open-ended diagnostic (ping) would otherwise
+# run forever with nobody watching.
+_cancel_on_disconnect: set[str] = set()
 
 
-async def _start_job(name: str, args: list[str]) -> str:
+async def _start_job(
+    name: str, args: list[str], cancel_on_disconnect: bool = False
+) -> str:
     # setup_ap.sh and uplink_wifi.sh both self-elevate internally (sudo,
     # NOPASSWD - see the README's sudoers section), same as _run_script.
     process = await asyncio.create_subprocess_exec(
@@ -102,10 +111,26 @@ async def _start_job(name: str, args: list[str]) -> str:
         *args,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
+        # Own process group, so the interrupt below reaches the tool the
+        # script is running (ping), not just the script waiting on it.
+        start_new_session=cancel_on_disconnect,
     )
     job_id = uuid.uuid4().hex
     _jobs[job_id] = process
+    if cancel_on_disconnect:
+        _cancel_on_disconnect.add(job_id)
     return job_id
+
+
+async def _reap_interrupted(process: asyncio.subprocess.Process) -> None:
+    try:
+        await asyncio.wait_for(process.wait(), timeout=5)
+    except asyncio.TimeoutError:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        await process.wait()
 
 
 def _sse_output_fragment(job_id: str, output_id: str) -> str:
@@ -129,16 +154,32 @@ async def _stream_job(job_id: str):
     if process is None or process.stdout is None:
         yield "event: done\ndata: (no such job - already finished, or never started)\n\n"
         return
-    while True:
-        line = await process.stdout.readline()
-        if not line:
-            break
-        text = html.escape(line.decode(errors="replace").rstrip("\n"))
-        yield f"data: {text}<br>\n\n"
-    returncode = await process.wait()
-    yield f"data: <br>[exit code {returncode}]<br>\n\n"
-    yield "event: done\ndata: \n\n"
-    _jobs.pop(job_id, None)
+    try:
+        while True:
+            line = await process.stdout.readline()
+            if not line:
+                break
+            text = html.escape(line.decode(errors="replace").rstrip("\n"))
+            yield f"data: {text}<br>\n\n"
+        returncode = await process.wait()
+        yield f"data: <br>[exit code {returncode}]<br>\n\n"
+        yield "event: done\ndata: \n\n"
+    finally:
+        _jobs.pop(job_id, None)
+        if job_id in _cancel_on_disconnect:
+            _cancel_on_disconnect.discard(job_id)
+            if process.returncode is None:
+                # Client went away mid-run. No awaiting here: this can be
+                # running under a cancelled scope, where any await would be
+                # cancelled again straight away - so the interrupt is sent
+                # synchronously and the follow-up (SIGKILL if it ignores
+                # it, and reaping) handed to a separate task.
+                LOGGER.info("Output stream closed, interrupting job %s", job_id)
+                try:
+                    os.killpg(process.pid, signal.SIGINT)
+                except ProcessLookupError:
+                    pass
+                asyncio.create_task(_reap_interrupted(process))
 
 
 def _interface_info(name: str) -> dict:
@@ -370,6 +411,66 @@ async def start_uplink_wifi(ssid: str = Form(...), password: str = Form("")):
     return _sse_output_fragment(job_id, "job-output")
 
 
+def _diagnostic_commands() -> list[dict]:
+    # diagnostics.sh --show-commands prints one "<name> [<param> ...] |
+    # <description>" line per command - the page is built entirely from
+    # this, so adding a command means only editing the script.
+    try:
+        result = subprocess.run(
+            [str(SCRIPTS_DIR / "diagnostics.sh"), "--show-commands"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired) as e:
+        LOGGER.info("Failed to list diagnostics commands: %s", e)
+        return []
+    commands = []
+    for line in result.stdout.splitlines():
+        signature, _, description = line.partition("|")
+        words = signature.split()
+        if words:
+            commands.append(
+                {
+                    "name": words[0],
+                    "params": words[1:],
+                    "description": description.strip(),
+                }
+            )
+    return sorted(commands, key=lambda c: c["name"])
+
+
+@app.get(
+    "/diagnostics", response_class=HTMLResponse, dependencies=[Depends(require_login)]
+)
+def diagnostics(request: Request):
+    return templates.TemplateResponse(
+        request, "diagnostics.html", {"commands": _diagnostic_commands()}
+    )
+
+
+@app.post(
+    "/run/diagnostics",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_login)],
+)
+async def start_diagnostic(command: str = Form(...), param: list[str] = Form([])):
+    # Only commands the script itself advertises, with the right number of
+    # non-blank params - everything else (per-param validation included)
+    # is the script's job. Args go straight to exec, never through a shell.
+    known = {c["name"]: c for c in await asyncio.to_thread(_diagnostic_commands)}
+    if command not in known:
+        raise HTTPException(status_code=400, detail="unknown command")
+    if len(param) != len(known[command]["params"]) or not all(p.strip() for p in param):
+        raise HTTPException(status_code=400, detail="wrong parameters")
+    job_id = await _start_job(
+        "diagnostics.sh",
+        ["--run-command", command, *[p.strip() for p in param]],
+        cancel_on_disconnect=True,
+    )
+    return _sse_output_fragment(job_id, "job-output")
+
+
 @app.get("/run/stream/{job_id}", dependencies=[Depends(require_login)])
 async def stream_job(job_id: str):
     return StreamingResponse(_stream_job(job_id), media_type="text/event-stream")
@@ -467,7 +568,7 @@ if __name__ == "__main__":
         "app:app",
         host=os.environ.get("WEBAPP_HOST", "0.0.0.0"),
         # 443, the default HTTPS port - not privileged for this process
-        # despite running as pi_user, not root: mnet-ap-webapp.service
+        # despite running as pi_user, not root: mnh-ap-webapp.service
         # grants just CAP_NET_BIND_SERVICE (see setup_webapp.sh), rather
         # than needing to run as root for this alone.
         port=int(os.environ.get("WEBAPP_PORT", "443")),

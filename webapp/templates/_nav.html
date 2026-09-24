@@ -17,6 +17,12 @@
   <a href="/wireguard-details" role="button" class="secondary">WireGuard Details</a>
   {% endif %}
 
+  {% if request.url.path == "/diagnostics" %}
+  <a role="button" class="secondary disabled" aria-disabled="true">Diagnostics</a>
+  {% else %}
+  <a href="/diagnostics" role="button" class="secondary">Diagnostics</a>
+  {% endif %}
+
   {% if request.url.path == "/manage" %}
   <a role="button" class="secondary disabled" aria-disabled="true">Manage</a>
   {% else %}

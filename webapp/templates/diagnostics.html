@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>mnh-ap - Diagnostics</title>
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+  <link rel="stylesheet" href="/static/pico.min.css">
+  <link rel="stylesheet" href="/static/site.css">
+  <script src="/static/htmx.min.js"></script>
+  <script src="/static/htmx-ext-sse.js"></script>
+  <script src="/static/output-follow.js" defer></script>
+</head>
+<body>
+  {% include "_header.html" %}
+  {% include "_nav.html" %}
+  <main>
+    <div class="cards">
+    {% for cmd in commands %}
+    <article>
+      <header>{{ cmd.name }}</header>
+      <p>{{ cmd.description }}</p>
+      {# onsubmit only fires once native validation (required) has passed. #}
+      <form hx-post="/run/diagnostics" hx-target="#job-output" hx-swap="outerHTML"
+        hx-disabled-elt="find button" onsubmit="showOutput({{ (cmd.name ~ ' output')|tojson|forceescape }})">
+        <input type="hidden" name="command" value="{{ cmd.name }}">
+        {% for p in cmd.params %}
+        <label for="{{ cmd.name }}-{{ loop.index }}">{{ p }}</label>
+        <input type="text" id="{{ cmd.name }}-{{ loop.index }}" name="param" required>
+        {% endfor %}
+        <p class="actions">
+          <button type="submit" class="secondary">Run</button>
+        </p>
+      </form>
+    </article>
+    {% else %}
+    <article>
+      <header>No diagnostics available</header>
+      <p>diagnostics.sh didn't list any commands.</p>
+    </article>
+    {% endfor %}
+    </div>
+  </main>
+
+  <dialog id="output-dialog" onclose="resetOutput()">
+    <article>
+      <header id="output-heading">Output</header>
+      <pre id="job-output" class="output"></pre>
+      <footer>
+        <a role="button" class="secondary"
+          onclick="document.getElementById('output-dialog').close()">Close</a>
+      </footer>
+    </article>
+  </dialog>
+
+  <script>
+    function showOutput(heading) {
+      document.getElementById('output-heading').textContent = heading;
+      document.getElementById('output-dialog').showModal();
+    }
+
+    // Swapping the output element out (through htmx, so its SSE extension
+    // notices) closes the event stream, which is what tells the server to
+    // interrupt a still-running command - e.g. a ping with no end.
+    // Fires however the dialog closes (button, Esc), and also leaves a
+    // fresh, empty target for the next run.
+    function resetOutput() {
+      htmx.swap('#job-output', '<pre id="job-output" class="output"></pre>',
+        {swapStyle: 'outerHTML'});
+    }
+  </script>
+</body>
+</html>

@@ -19,12 +19,12 @@ ENV_FILE="$(dirname "$SCRIPT")/wireguard-ap.env"
 source "$ENV_FILE"
 
 # --- if this SSH session is over Wi-Fi, carry on in the background ----------
-if [[ -z "${MNET_DETACHED:-}" && -n "${SSH_CONNECTION:-}" ]]; then
+if [[ -z "${MNH_DETACHED:-}" && -n "${SSH_CONNECTION:-}" ]]; then
   VIA=$(ip -o route get "${SSH_CONNECTION%% *}" | sed -n 's/.* dev \([^ ]*\).*/\1/p' || true)
   if [[ "$VIA" == "$BR" || "$VIA" == wlan* ]]; then
     echo "Your SSH session is over Wi-Fi ($VIA) and will drop while this runs."
-    echo "Continuing in the background. Reconnect in about a minute. Log: journalctl -u mnet-setup"
-    exec systemd-run --unit=mnet-setup --collect --setenv=MNET_DETACHED=1 "$SCRIPT" "$@"
+    echo "Continuing in the background. Reconnect in about a minute. Log: journalctl -u mnh-setup"
+    exec systemd-run --unit=mnh-setup --collect --setenv=MNH_DETACHED=1 "$SCRIPT" "$@"
   fi
 fi
 
@@ -50,7 +50,7 @@ vht_oper_centr_freq_seg0_idx=42"
     radio="hw_mode=g
 ieee80211n=1"
   fi
-  ( umask 077; cat >"/etc/hostapd/mnet-${iface}.conf" <<EOF
+  ( umask 077; cat >"/etc/hostapd/mnh-${iface}.conf" <<EOF
 interface=${iface}
 bridge=${BR}
 driver=nl80211
@@ -78,8 +78,8 @@ if [[ $MODE == dual ]]; then
   write_hostapd "$IF_24" 2.4 "$CH_24"
 else
   # give wlan0 back to NetworkManager as a client
-  systemctl disable --now "mnet-hostapd@${IF_24}" 2>/dev/null || true
-  rm -f "/etc/hostapd/mnet-${IF_24}.conf"
+  systemctl disable --now "mnh-hostapd@${IF_24}" 2>/dev/null || true
+  rm -f "/etc/hostapd/mnh-${IF_24}.conf"
   iw dev "$IF_24" set type managed 2>/dev/null || true
 fi
 
@@ -87,7 +87,7 @@ fi
 UNMANAGED="interface-name:${IF_5}"
 if [[ $MODE == dual ]]; then UNMANAGED="interface-name:${IF_24};${UNMANAGED}"; fi
 
-cat >/etc/NetworkManager/conf.d/90-mnet-ap.conf <<EOF
+cat >/etc/NetworkManager/conf.d/90-mnh-ap.conf <<EOF
 [main]
 ignore-carrier=interface-name:${BR}
 
@@ -106,9 +106,9 @@ nmcli con add type bridge con-name "$BR" ifname "$BR" \
 nmcli con up "$BR" || true
 
 # --- hostapd unit: starts when the interface appears (hotplug-safe) ---------
-cat >/etc/systemd/system/mnet-hostapd@.service <<'EOF'
+cat >/etc/systemd/system/mnh-hostapd@.service <<'EOF'
 [Unit]
-Description=hostapd for mnet-ap on %i
+Description=hostapd for mnh-ap on %i
 BindsTo=sys-subsystem-net-devices-%i.device
 After=sys-subsystem-net-devices-%i.device NetworkManager.service
 Wants=NetworkManager.service
@@ -117,7 +117,7 @@ Wants=NetworkManager.service
 Type=simple
 ExecStartPre=-/usr/sbin/rfkill unblock wlan
 ExecStartPre=/bin/sh -c 'for i in $$(seq 1 30); do ip link show br-ap >/dev/null 2>&1 && exit 0; sleep 1; done; exit 1'
-ExecStart=/usr/sbin/hostapd /etc/hostapd/mnet-%i.conf
+ExecStart=/usr/sbin/hostapd /etc/hostapd/mnh-%i.conf
 Restart=on-failure
 RestartSec=5
 
@@ -127,8 +127,8 @@ EOF
 
 # --- dnsmasq on the bridge ---------------------------------------------------
 # Clients get the AP as DNS; dnsmasq forwards to /etc/resolv.conf (eth0's servers first).
-rm -f /etc/dnsmasq.d/mnet-ap.conf
-cat >/etc/dnsmasq.d/mnet-ap.conf <<EOF
+rm -f /etc/dnsmasq.d/mnh-ap.conf
+cat >/etc/dnsmasq.d/mnh-ap.conf <<EOF
 interface=${BR}
 bind-dynamic
 dhcp-authoritative
@@ -138,7 +138,7 @@ strict-order
 EOF
 
 mkdir -p /etc/systemd/system/dnsmasq.service.d
-cat >/etc/systemd/system/dnsmasq.service.d/mnet-ap.conf <<'EOF'
+cat >/etc/systemd/system/dnsmasq.service.d/mnh-ap.conf <<'EOF'
 [Unit]
 After=NetworkManager.service
 
@@ -152,9 +152,9 @@ systemctl daemon-reload
 AP_IFACES=("$IF_5")
 if [[ $MODE == dual ]]; then AP_IFACES+=("$IF_24"); fi
 for i in "${AP_IFACES[@]}"; do
-  systemctl enable "mnet-hostapd@${i}"
+  systemctl enable "mnh-hostapd@${i}"
   if [[ -e "/sys/class/net/$i" ]]; then
-    systemctl restart "mnet-hostapd@${i}"
+    systemctl restart "mnh-hostapd@${i}"
   else
     echo "$i is not present right now; its AP will start as soon as it appears."
   fi
@@ -165,6 +165,6 @@ systemctl restart dnsmasq
 # br-ap only exists from this point on - re-run so its local-routing table
 # (set up by setup_forwarding_and_nat.sh, which runs before br-ap exists)
 # actually gets populated, rather than silently skipping it every time.
-[[ -x /usr/local/sbin/mnet-ap-local-routing.sh ]] && /usr/local/sbin/mnet-ap-local-routing.sh
+[[ -x /usr/local/sbin/mnh-ap-local-routing.sh ]] && /usr/local/sbin/mnh-ap-local-routing.sh
 
 echo "Done ($MODE). Join '${SSID}' and run: ssh ${PI_USER}@${AP_IP}"
