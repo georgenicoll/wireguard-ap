@@ -415,7 +415,19 @@ https://<pi_host>/       # or https://<ap_ip>/ once joined to the AP - also link
   than a separate site password to remember. A signed session cookie
   (`itsdangerous`, `secure`-flagged since the site is HTTPS-only) persists
   the login; its signing key (`/var/lib/mnh-ap/.session_secret`) is generated
-  once on first run and kept, so a redeploy doesn't log everyone out.
+  once on first run and kept, so a redeploy doesn't log everyone out. The
+  cookie holds only `{"authenticated": true, "login_at": <unix time>}`
+  (signed, not encrypted, and never the password). Two limits apply, both
+  enforced by the server from the signed cookie rather than by the browser
+  dropping it: a login ends after **one hour of inactivity** (sliding - every
+  authenticated page load issues a fresh cookie; `SESSION_LIFETIME_SECONDS`
+  in `app.py`), and after **4 hours from the login itself** however active
+  you've been (`SESSION_ABSOLUTE_LIMIT_SECONDS`; `login_at` is never
+  rewritten by the sliding refresh). A cookie with no usable `login_at` -
+  such as one from before the cap existed - counts as expired. Sessions are
+  stateless, so there's nothing to revoke early: logging out clears your
+  browser's copy, and the only way to invalidate every existing cookie is to
+  delete `/var/lib/mnh-ap/.session_secret` and restart the service.
 - **Security model**: the web app is the part of this project most exposed
   to whatever is on the network, so it's kept unable to hurt anything else
   if it's ever compromised:

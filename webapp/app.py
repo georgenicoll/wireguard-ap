@@ -17,6 +17,7 @@ import secrets
 import signal
 import socket
 import subprocess
+import time
 import uuid
 from pathlib import Path
 
@@ -320,7 +321,26 @@ else:
         f.write(SESSION_SECRET)
 
 app = FastAPI()
-app.add_middleware(SessionMiddleware, secret_key=SESSION_SECRET, https_only=True)
+# How long a login survives without being used, then it's the login page
+# again. Sliding: every authenticated page load (see require_login) issues a
+# fresh cookie, so an hour of *inactivity* logs you out, not an hour since
+# you logged in. The cookie carries its own signed timestamp, so this is
+# enforced by the server, not just by the browser expiring the cookie.
+# (Sessions are stateless - nothing to revoke early short of changing
+# SESSION_SECRET - so a short lifetime is what limits a stolen cookie.)
+SESSION_LIFETIME_SECONDS = 60 * 60
+# ...but never longer than this from the login itself, however active you
+# are: sliding expiry alone would let a stolen cookie that keeps being used
+# live forever. Enforced in require_login from "login_at", which lives in
+# the signed cookie and is never rewritten by the sliding refresh.
+SESSION_ABSOLUTE_LIMIT_SECONDS = 4 * 60 * 60
+
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=SESSION_SECRET,
+    https_only=True,
+    max_age=SESSION_LIFETIME_SECONDS,
+)
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 templates = Jinja2Templates(directory=BASE_DIR / "templates")
 
@@ -342,6 +362,20 @@ async def no_cache_static(request: Request, call_next):
 def require_login(request: Request) -> None:
     if not request.session.get("authenticated"):
         raise HTTPException(status_code=303, headers={"Location": "/login"})
+    # Absolute cap. A cookie with no (or an unusable) login time - one issued
+    # before this existed, or a clock that has jumped backwards - counts as
+    # expired rather than being let through: fail closed.
+    login_at = request.session.get("login_at")
+    age = time.time() - login_at if isinstance(login_at, (int, float)) else None
+    if age is None or not 0 <= age <= SESSION_ABSOLUTE_LIMIT_SECONDS:
+        request.session.clear()
+        raise HTTPException(status_code=303, headers={"Location": "/login"})
+    # Sliding expiry: writing the session back (even unchanged) makes the
+    # middleware issue the cookie again, with a fresh signed timestamp - so
+    # the hour restarts on every page load. Newer Starlette only sends the
+    # cookie for a *modified* session (older versions sent it whenever there
+    # was one), so this is what keeps the behaviour the same on either.
+    request.session["authenticated"] = True
 
 
 @app.get("/", response_class=HTMLResponse, dependencies=[Depends(require_login)])
@@ -575,6 +609,7 @@ def login_form(request: Request):
 def login(request: Request, password: str = Form(...)):
     if secrets.compare_digest(password, PSK):
         request.session["authenticated"] = True
+        request.session["login_at"] = int(time.time())
         return RedirectResponse("/", status_code=303)
     return templates.TemplateResponse(
         request,
