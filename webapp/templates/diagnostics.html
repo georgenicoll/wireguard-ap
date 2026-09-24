@@ -15,10 +15,21 @@
   {% include "_header.html" %}
   {% include "_nav.html" %}
   <main>
+    {% if commands %}
+    <div class="field-row diagnostic-picker">
+      <label for="diagnostic-select">Diagnostic</label>
+      <select id="diagnostic-select" class="fit-content" onchange="showDiagnostic(this.value)">
+        <option value="" selected disabled hidden>Choose a diagnostic...</option>
+        {% for cmd in commands %}
+        <option value="{{ cmd.name }}">{{ cmd.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    {% endif %}
+
     <div class="cards">
     {% for cmd in commands %}
-    <article>
-      <header>{{ cmd.name }}</header>
+    <article data-command="{{ cmd.name }}" hidden>
       <p>{{ cmd.description }}</p>
       {# onsubmit only fires once native validation (required) has passed. #}
       <form hx-post="/run/diagnostics" hx-target="#job-output" hx-swap="outerHTML"
@@ -62,6 +73,22 @@
   </dialog>
 
   <script>
+    // Only the chosen diagnostic's card is shown; "" (the initial,
+    // unlisted "Choose a diagnostic..." placeholder) hides them all.
+    function showDiagnostic(name) {
+      document.querySelectorAll('article[data-command]').forEach(function (a) {
+        a.hidden = a.dataset.command !== name;
+      });
+    }
+
+    // Browsers restore a <select>'s value on reload/back but not the
+    // cards' hidden state, so re-sync them. pageshow also covers the
+    // back/forward cache.
+    window.addEventListener('pageshow', function () {
+      const select = document.getElementById('diagnostic-select');
+      if (select) showDiagnostic(select.value);
+    });
+
     function showOutput(heading) {
       document.getElementById('output-heading').textContent = heading;
       document.getElementById('output-dialog').showModal();

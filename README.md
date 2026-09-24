@@ -53,12 +53,12 @@ login banner - see below) is fetched automatically the first time you run
   self-elevates with `sudo` internally (`setup_host.sh`,
   `setup_wireguard.sh`, `setup_forwarding_and_nat.sh`, `setup_ap.sh`,
   `uplink_wifi.sh`, `setup_webapp.sh`, `view_currently_associated_clients.sh`,
-  `view_wireguard_status.sh`, `shutdown_pi.sh`), not root access in general:
+  `view_wireguard_status.sh`, `diagnostics_sudo.sh`, `shutdown_pi.sh`), not root access in general:
   ```bash
   PI_USER=changeme   # <-- OVERWRITE with your real pi_user before running this
 
   cat <<EOF | sudo tee "/etc/sudoers.d/010-${PI_USER}-wireguard-ap"
-  ${PI_USER} ALL=(root) NOPASSWD: /home/${PI_USER}/setup_host.sh, /home/${PI_USER}/setup_wireguard.sh, /home/${PI_USER}/setup_forwarding_and_nat.sh, NOPASSWD:SETENV: /home/${PI_USER}/setup_ap.sh, NOPASSWD: /home/${PI_USER}/uplink_wifi.sh, NOPASSWD: /home/${PI_USER}/setup_webapp.sh, NOPASSWD: /home/${PI_USER}/view_currently_associated_clients.sh, NOPASSWD: /home/${PI_USER}/view_wireguard_status.sh, NOPASSWD: /home/${PI_USER}/shutdown_pi.sh
+  ${PI_USER} ALL=(root) NOPASSWD: /home/${PI_USER}/setup_host.sh, /home/${PI_USER}/setup_wireguard.sh, /home/${PI_USER}/setup_forwarding_and_nat.sh, NOPASSWD:SETENV: /home/${PI_USER}/setup_ap.sh, NOPASSWD: /home/${PI_USER}/uplink_wifi.sh, NOPASSWD: /home/${PI_USER}/setup_webapp.sh, NOPASSWD: /home/${PI_USER}/view_currently_associated_clients.sh, NOPASSWD: /home/${PI_USER}/view_wireguard_status.sh, NOPASSWD: /home/${PI_USER}/diagnostics_sudo.sh, NOPASSWD: /home/${PI_USER}/shutdown_pi.sh
   EOF
   sudo chmod 0440 "/etc/sudoers.d/010-${PI_USER}-wireguard-ap"
   sudo visudo -c   # validates syntax - a bad sudoers file can lock out sudo entirely
@@ -344,9 +344,17 @@ baked into the initial HTML, plus links to two status pages:
   `type?=A,MX` (optional pick one) - the page draws text boxes or drop-downs
   accordingly, and both the app and the script check them. Commands: `ping`,
   `traceroute`, `dig`, `ip-addr-list`, `ip-route-list`, `ip-route-get`,
-  `wg-status`, `ap-clients` (these last two run the existing self-elevating
-  view scripts), `service-status` and `logs` (fixed list of this project's
+  `ap-clients` (runs the existing self-elevating view script), `service-status` and `logs` (fixed list of this project's
   units).
+
+  Commands that need root live in `scripts/diagnostics_sudo.sh` (currently
+  `wg-status`), which speaks the same `--show-commands`/`--run-command`
+  protocol: `diagnostics.sh` appends that script's `--show-commands` output
+  to its own and hands any `--run-command` it doesn't recognise over to it,
+  so it holds no knowledge of the root-only commands. Only `--run-command`
+  elevates (sudo), so `diagnostics_sudo.sh` needs its own sudoers entry
+  (step 2 above). `diagnostics_lib.sh` is the registry/argument-checking
+  code both scripts source.
 - **`/manage`** — runs `setup_ap.sh`/`uplink_wifi.sh` with parameters chosen
   in the browser (mode, band, upstream SSID/password) and streams their
   output live rather than just showing a final result, using htmx's

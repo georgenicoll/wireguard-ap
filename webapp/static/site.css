@@ -319,3 +319,19 @@ select {
   background: #eab308 !important;
   border-color: #eab308 !important;
 }
+
+/* Pico makes every <select> full-width; "auto" sizes it to its widest
+   option instead (the Diagnostics page's command picker). */
+select.fit-content {
+  width: auto;
+}
+/* .field-row stretches its selects (flex: 1) to fill the line - keep this
+   one at its own width, next to its label. */
+.field-row select.fit-content {
+  flex: none;
+}
+
+/* Gap between the Diagnostics page's command picker and the card below it. */
+.diagnostic-picker {
+  margin-bottom: var(--pico-spacing);
+}

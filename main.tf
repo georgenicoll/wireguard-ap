@@ -9,6 +9,8 @@ locals {
     "view_currently_associated_clients.sh",
     "view_wireguard_status.sh",
     "diagnostics.sh",
+    "diagnostics_sudo.sh",
+    "diagnostics_lib.sh",
     "setup_webapp.sh",
     "shutdown_pi.sh",
   ]
@@ -155,6 +157,16 @@ resource "terraform_data" "ap_deploy" {
   provisioner "file" {
     source      = "${path.module}/scripts/diagnostics.sh"
     destination = "${local.remote_dir}/diagnostics.sh"
+  }
+
+  provisioner "file" {
+    source      = "${path.module}/scripts/diagnostics_sudo.sh"
+    destination = "${local.remote_dir}/diagnostics_sudo.sh"
+  }
+
+  provisioner "file" {
+    source      = "${path.module}/scripts/diagnostics_lib.sh"
+    destination = "${local.remote_dir}/diagnostics_lib.sh"
   }
 
   provisioner "file" {

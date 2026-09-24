@@ -20,38 +20,21 @@
 # --run-command both pick it up from the registry. The registry is rebuilt
 # on every call, so a choice list can be computed at runtime too.
 #
-# Runs as the calling user (no self-elevation, so no sudoers entry needed) -
-# keep commands to things that don't need root. Anything that does is a
-# separate self-elevating script (see wg-status, ap-clients), which already
-# has its own sudoers entry. Args come from a web form: always validate
-# free text (see require_host) rather than trusting it, and never pass it
-# through eval/sh -c.
+# Runs as the calling user - keep commands to things that don't need root.
+# Commands that do live in diagnostics_sudo.sh instead, which speaks this
+# same protocol: --show-commands here also lists whatever that script
+# lists, and --run-command hands any command not registered here over to
+# it. So nothing in this file knows what the root-only commands are.
+# Args come from a web form: always validate free text (see require_host)
+# rather than trusting it, and never pass it through eval/sh -c.
 set -euo pipefail
 
 SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
 
-declare -A PARAMS DESCRIPTIONS
-COMMAND_NAMES=()
+SUDO_SCRIPT="${SCRIPT_DIR}/diagnostics_sudo.sh"
 
-# register <name> "<space-separated params>" "<description>"
-register() {
-  COMMAND_NAMES+=("$1")
-  PARAMS["$1"]="$2"
-  DESCRIPTIONS["$1"]="$3"
-}
-
-# Hostname or IPv4/IPv6 address only. In particular can't start with "-",
-# so a value can never be mistaken for an option by the tool it's given to.
-require_host() {
-  if [[ ! $1 =~ ^[A-Za-z0-9][A-Za-z0-9._:-]*$ ]]; then
-    echo "invalid host: '$1'" >&2
-    exit 2
-  fi
-}
-
-require_tool() {
-  command -v "$1" >/dev/null || { echo "$1 is not installed" >&2; exit 127; }
-}
+# shellcheck source=diagnostics_lib.sh
+source "${SCRIPT_DIR}/diagnostics_lib.sh"
 
 # ---- commands ---------------------------------------------------------
 
@@ -107,11 +90,6 @@ cmd_ip_route_get() {
   ip route get "$1"
 }
 
-register wg-status "" "WireGuard peer status: endpoint, latest handshake, transfer"
-cmd_wg_status() {
-  "${SCRIPT_DIR}/view_wireguard_status.sh"
-}
-
 register ap-clients "" "Wi-Fi devices currently associated with the access point"
 cmd_ap_clients() {
   "${SCRIPT_DIR}/view_currently_associated_clients.sh"
@@ -134,55 +112,24 @@ cmd_logs() {
 
 # ---- dispatch ---------------------------------------------------------
 
-show_commands() {
-  local name
-  for name in "${COMMAND_NAMES[@]}"; do
-    # Unquoted on purpose: collapses an empty param list to nothing.
-    echo "${name}${PARAMS[$name]:+ ${PARAMS[$name]}} | ${DESCRIPTIONS[$name]}"
-  done
-}
-
-# Checks one arg against its param spec ("name", "name?", "name=a,b" ...).
-check_param() {
-  local spec="$1" value="$2"
-  local name="${spec%%[?=]*}" rest="${spec#"${spec%%[?=]*}"}"
-  local optional=0 choices=""
-  [[ $rest == \?* ]] && { optional=1; rest="${rest#\?}"; }
-  [[ $rest == =* ]] && choices="${rest#=}"
-
-  if [[ -z $value ]]; then
-    ((optional)) || { echo "$name is required" >&2; exit 2; }
-    return 0
-  fi
-  if [[ -n $choices && ",${choices}," != *",${value},"* ]]; then
-    echo "$name must be one of: ${choices//,/, } (got '$value')" >&2
-    exit 2
-  fi
-}
-
-run_command() {
-  local name="${1:-}"
-  [[ -n $name ]] || { echo "usage: $0 --run-command <name> [<arg> ...]" >&2; exit 2; }
-  shift
-  [[ -v PARAMS[$name] ]] || { echo "unknown command: $name" >&2; exit 2; }
-
-  local -a specs
-  read -r -a specs <<<"${PARAMS[$name]}"
-  if (($# != ${#specs[@]})); then
-    echo "$name takes ${#specs[@]} parameter(s) (${PARAMS[$name]:-none}), got $#" >&2
-    exit 2
-  fi
-
-  local i
-  for i in "${!specs[@]}"; do
-    check_param "${specs[$i]}" "${@:$((i + 1)):1}"
-  done
-
-  "cmd_${name//-/_}" "$@"
-}
-
 case "${1:-}" in
-  --show-commands) show_commands ;;
-  --run-command) shift; run_command "$@" ;;
+  --show-commands)
+    show_commands
+    # A missing or failing sudo script just means no root-only commands.
+    if [[ -x $SUDO_SCRIPT ]]; then "$SUDO_SCRIPT" --show-commands || true; fi
+    ;;
+  --run-command)
+    shift
+    name="${1:-}"
+    [[ -n $name ]] || { echo "usage: $0 --run-command <name> [<arg> ...]" >&2; exit 2; }
+    if has_command "$name"; then
+      run_command "$@"
+    elif [[ -x $SUDO_SCRIPT ]]; then
+      exec "$SUDO_SCRIPT" --run-command "$@"
+    else
+      echo "unknown command: $name" >&2
+      exit 2
+    fi
+    ;;
   *) echo "usage: $0 --show-commands | --run-command <name> [<arg> ...]" >&2; exit 2 ;;
 esac
