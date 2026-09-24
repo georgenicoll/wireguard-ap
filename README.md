@@ -464,9 +464,10 @@ https://<pi_host>/       # or https://<ap_ip>/ once joined to the AP - also link
 
 `./dev_webapp.sh` runs the web UI locally with hot reload, so UI changes
 (templates, `static/`, `app.py`) can be iterated on without deploying to
-the Pi each time. It generates a `webapp/dev-cert.pem`/`dev-key.pem`
-self-signed cert for `localhost` (gitignored, separate from the Pi's own
-`cert.pem`/`key.pem`), sets a dummy `SSID`/`PSK` (override by exporting
+the Pi each time. It generates a self-signed cert for `localhost` in `.dev/`
+(`dev-cert.pem`/`dev-key.pem`, git-ignored, and outside `webapp/` so it's
+never uploaded to the Pi; separate from the Pi's own certificate), keeps
+its session secret there too, sets a dummy `SSID`/`PSK` (override by exporting
 `PSK` beforehand), and serves on `https://127.0.0.1:8443/` via
 `uv run app.py` with `uvicorn --reload` enabled. The login password is
 printed to the console on startup.

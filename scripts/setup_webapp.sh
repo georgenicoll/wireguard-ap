@@ -79,6 +79,10 @@ fi
 # lives in STATE_DIR too - a stale one uploaded from a dev checkout would
 # otherwise be a signing key someone else might hold).
 rm -f "$OLD_CERT" "$OLD_KEY" "${APP_DIR}/.session_secret"
+# Local-dev leftovers that older deploys uploaded along with webapp/ (dev
+# TLS key/cert, bytecode from the dev machine's Python) - never wanted here.
+rm -f "${APP_DIR}/dev-cert.pem" "${APP_DIR}/dev-key.pem"
+find "$APP_DIR" -name __pycache__ -type d -prune -exec rm -rf {} +
 
 # --- sudoers for the service account -------------------------------------
 # Only the scripts the web app actually runs as root, and where the set of
