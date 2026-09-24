@@ -8,6 +8,12 @@
 #   ./wga output
 #   ./wga destroy
 #
+# Plus one command that isn't a tofu one:
+#
+#   ./wga test [local|smoke|ui|reboot|all] [pytest args]
+#                  runs tests/integration.py against the deployed Pi (see the
+#                  README's "Integration tests"). Run it after every apply.
+#
 # Configuration:
 #   WGA_CONFIG     path to your private wireguard-ap.tfvars file (required for
 #                  plan/apply/destroy/refresh/import/console) - see
@@ -37,6 +43,8 @@ Examples:
   ./wga apply
   ./wga output -raw ssh_hint
   ./wga destroy
+  ./wga test               # integration tests: local + smoke + ui (run after apply)
+  ./wga test reboot        # opt-in: also restarts the Pi and checks it recovers
 USAGE
     exit 2
 }
@@ -44,6 +52,17 @@ USAGE
 [[ $# -lt 1 ]] && usage
 
 COMMAND="$1"; shift
+
+# Not a tofu command: runs the integration tests (a uv script, so there's
+# nothing to install first). WGA_CONFIG, if set, passes straight through in
+# the environment - the tests read the Pi's address and password from it.
+if [[ "$COMMAND" == "test" ]]; then
+    command -v uv >/dev/null 2>&1 || {
+        echo "error: 'uv' is not on PATH. See https://docs.astral.sh/uv/getting-started/installation/" >&2
+        exit 1
+    }
+    exec uv run "$REPO_DIR/tests/integration.py" "$@"
+fi
 
 command -v tofu >/dev/null 2>&1 || {
     echo "error: 'tofu' is not on PATH. See https://opentofu.org/docs/intro/install/" >&2
@@ -129,4 +148,27 @@ if [[ -n "${WGA_STATE_DIR:-}" ]]; then
 fi
 
 set -x
-exec tofu -chdir="$REPO_DIR" "$COMMAND" "${ARGS[@]}" "$@"
+if [[ "$COMMAND" != "apply" ]]; then
+    exec tofu -chdir="$REPO_DIR" "$COMMAND" "${ARGS[@]}" "$@"
+fi
+
+# apply is the one command run rather than exec'd, so that a reminder can be
+# printed once it has finished. Its exit status is passed straight through.
+status=0
+tofu -chdir="$REPO_DIR" "$COMMAND" "${ARGS[@]}" "$@" || status=$?
+set +x
+if [[ $status -eq 0 && " $* " != *" -destroy "* ]]; then
+    cat <<'MSG'
+
+================================================================================
+ Apply finished. Now check the Pi is actually healthy:
+
+     ./wga test            services, routing, permissions, web pages, the
+                           diagnostics and the browser UI (about 1 minute)
+     ./wga test reboot     opt-in: also restarts the Pi and checks it recovers
+
+ (needs WGA_CONFIG set, as for apply. It only reads - it changes nothing.)
+================================================================================
+MSG
+fi
+exit $status

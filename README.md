@@ -125,6 +125,7 @@ the same shell, these are likely set already.
 **5. Verify.**
 
 ```bash
+./wga test                   # about a minute; see "Integration tests" below
 ssh <pi_user>@<pi_host> '~/view_currently_associated_clients.sh'      # add --ssh to also list SSH sessions
 ```
 
@@ -190,6 +191,7 @@ the comments in `main.tf`.
 ./wga apply
 ./wga output
 ./wga destroy
+./wga test        # integration tests - run after every apply (see below)
 ```
 
 ## Outputs
@@ -479,6 +481,44 @@ path `app.py` looks for them locally (see `SCRIPTS_DIR`'s comment). This
 is for iterating on layout/styling/flow, not exercising the Pi-side
 scripts.
 
+## Integration tests
+
+`./wga apply` prints a reminder to run these when it finishes. They're not run
+automatically: they take about a minute, log in to the Pi's web UI and use a
+real browser, and you may not want that on every apply.
+
+```bash
+./wga test                # local + smoke + ui - the normal post-apply check
+./wga test smoke          # just the Pi's state and the web app over HTTPS (~30s)
+./wga test local          # no Pi needed - safe to run any time, e.g. before an apply
+./wga test reboot         # opt-in: restarts the Pi and checks it comes back healthy
+./wga test all            # everything, including the reboot
+./wga test smoke -k logs  # anything else is passed to pytest
+```
+
+`tests/integration.py` is a [uv](https://docs.astral.sh/uv/) script (its
+`pytest`, `httpx` and `playwright` dependencies are declared inline, like
+`app.py`'s), so there's nothing to install. The Pi tiers read `pi_host`,
+`pi_user`, `ssh_private_key_path`, `mode` and `psk` from the tfvars file
+`WGA_CONFIG` points at - the same one `./wga apply` uses. The password is held
+in memory only and never printed or written anywhere.
+
+| Tier | Needs the Pi | What it checks |
+|---|---|---|
+| `local` | no | The diagnostics scripts' argument handling, including injection attempts (`;`, `$(...)`, backticks, newlines, option-like values, choice values with commas, unknown or crafted command names) - and that they run nothing. The generated sudoers file for the web user is valid and hasn't been widened. The UI, in a browser, against a throwaway copy of the web app on a spare port (it never touches any other server). |
+| `smoke` | yes (SSH + HTTPS) | Every service enabled and active, no failed units, the web app running as `mnh-web` on 443, the routing-protection rules in place, permissions (private state directory, traverse-only ACL on the home directory, scripts `755` and owned by the deploy user, nothing writable by the web user), no leftover secrets, dev files or old `mnet` names on the Pi. Pages need a login and the session cookie is `Secure`/`HttpOnly`/`SameSite`. Every read-only page and diagnostic returns real data (including the ones that go through `sudo`), bad or malicious requests are refused and run nothing, and a `ping` stops when its stream is dropped. |
+| `ui` | yes | The same browser checks as `local`, against the real Pi: the picker, the cards, Run button placement, optional and choice fields, `ping` running until the dialog is closed (button or Esc) and then stopping, output that follows at the bottom. Needs Chromium: if it's missing the test says to run `uv run --with playwright playwright install chromium`. |
+| `reboot` | yes | Opt-in. Clicks **Restart** in the UI, waits for the "restarting" page to return to the login, confirms the Pi has a new boot id, then waits for every service, the routing protection and the web app to be healthy again. Takes a few minutes and briefly takes the AP down - don't run it while relying on the Pi. |
+
+The Pi tiers are read-only apart from starting and stopping a `ping`; only
+`reboot` changes anything. A failing run doesn't undo the deploy - the
+output names what's wrong.
+
+To add a check, add a test to `tests/integration.py` and mark it with its
+tier (`@pytest.mark.smoke` and so on). A new diagnostic command needs no
+test changes for the page itself, but should get a case in the `smoke`
+diagnostics tests (and, if it takes free text, in the injection tests).
+
 ## Notes
 
 - `psk` is marked `sensitive`, but it still ends up in OpenTofu state because
@@ -521,7 +561,8 @@ scripts.
 ## Layout
 
 ```
-wga                             driver script: ./wga <tofu command>
+wga                             driver script: ./wga <tofu command> | ./wga test
+tests/integration.py            integration tests (uv script) - see "Integration tests"
 wireguard-ap.example.tfvars     template for your private config file
 main.tf / variables.tf / outputs.tf / versions.tf
 templates/wireguard-ap.env.tftpl
@@ -535,6 +576,9 @@ scripts/setup_ap.sh
 scripts/uplink_wifi.sh
 scripts/view_currently_associated_clients.sh
 scripts/view_wireguard_status.sh
+scripts/diagnostics.sh          Diagnostics page commands (--show-commands / --run-command)
+scripts/diagnostics_sudo.sh     the root-only ones, same protocol; diagnostics.sh delegates to it
+scripts/diagnostics_lib.sh      registry/argument checking both source
 scripts/setup_webapp.sh
 scripts/shutdown_pi.sh
 webapp/app.py
