@@ -25,8 +25,16 @@
         hx-disabled-elt="find button" onsubmit="showOutput({{ (cmd.name ~ ' output')|tojson|forceescape }})">
         <input type="hidden" name="command" value="{{ cmd.name }}">
         {% for p in cmd.params %}
-        <label for="{{ cmd.name }}-{{ loop.index }}">{{ p }}</label>
-        <input type="text" id="{{ cmd.name }}-{{ loop.index }}" name="param" required>
+        {% set field_id = cmd.name ~ "-" ~ loop.index %}
+        <label for="{{ field_id }}">{{ p.name }}{% if p.optional %} (optional){% endif %}</label>
+        {% if p.choices %}
+        <select id="{{ field_id }}" name="param"{% if not p.optional %} required{% endif %}>
+          {% if p.optional %}<option value="" selected></option>{% endif %}
+          {% for c in p.choices %}<option value="{{ c }}">{{ c }}</option>{% endfor %}
+        </select>
+        {% else %}
+        <input type="text" id="{{ field_id }}" name="param"{% if not p.optional %} required{% endif %}>
+        {% endif %}
         {% endfor %}
         <p class="actions">
           <button type="submit" class="secondary">Run</button>

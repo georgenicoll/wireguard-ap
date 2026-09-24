@@ -339,6 +339,14 @@ baked into the initial HTML, plus links to two status pages:
   user (no sudo), validates its own arguments, and the app only ever passes
   them to it as separate exec args (never via a shell), for commands the
   script itself advertised.
+  Parameters are declared in the `--show-commands` line: `host` (required
+  text), `server?` (optional text), `unit=a,b,c` (pick one) or
+  `type?=A,MX` (optional pick one) - the page draws text boxes or drop-downs
+  accordingly, and both the app and the script check them. Commands: `ping`,
+  `traceroute`, `dig`, `ip-addr-list`, `ip-route-list`, `ip-route-get`,
+  `wg-status`, `ap-clients` (these last two run the existing self-elevating
+  view scripts), `service-status` and `logs` (fixed list of this project's
+  units).
 - **`/manage`** — runs `setup_ap.sh`/`uplink_wifi.sh` with parameters chosen
   in the browser (mode, band, upstream SSID/password) and streams their
   output live rather than just showing a final result, using htmx's

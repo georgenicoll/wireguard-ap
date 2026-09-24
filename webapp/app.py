@@ -411,6 +411,23 @@ async def start_uplink_wifi(ssid: str = Form(...), password: str = Form("")):
     return _sse_output_fragment(job_id, "job-output")
 
 
+_PARAM_TOKEN = re.compile(r"([A-Za-z0-9_.@:-]+)(\?)?(?:=(\S+))?")
+
+
+def _parse_param(token: str) -> dict:
+    # "host" (required text), "server?" (optional text), "unit=a,b" (pick
+    # one) or "type?=a,b" (optional pick one) - see diagnostics.sh's header.
+    match = _PARAM_TOKEN.fullmatch(token)
+    if not match:
+        return {"name": token, "optional": False, "choices": []}
+    name, optional, choices = match.groups()
+    return {
+        "name": name,
+        "optional": bool(optional),
+        "choices": choices.split(",") if choices else [],
+    }
+
+
 def _diagnostic_commands() -> list[dict]:
     # diagnostics.sh --show-commands prints one "<name> [<param> ...] |
     # <description>" line per command - the page is built entirely from
@@ -433,7 +450,7 @@ def _diagnostic_commands() -> list[dict]:
             commands.append(
                 {
                     "name": words[0],
-                    "params": words[1:],
+                    "params": [_parse_param(w) for w in words[1:]],
                     "description": description.strip(),
                 }
             )
@@ -455,17 +472,26 @@ def diagnostics(request: Request):
     dependencies=[Depends(require_login)],
 )
 async def start_diagnostic(command: str = Form(...), param: list[str] = Form([])):
-    # Only commands the script itself advertises, with the right number of
-    # non-blank params - everything else (per-param validation included)
-    # is the script's job. Args go straight to exec, never through a shell.
+    # Only commands the script itself advertises, with one value per param
+    # - blank only where the param is optional, and (for a choice param)
+    # only one of the advertised choices. Anything beyond that (validating
+    # free text) is the script's job, which re-checks all of this too. A
+    # blank optional value is still sent, as "", to keep args positional.
     known = {c["name"]: c for c in await asyncio.to_thread(_diagnostic_commands)}
     if command not in known:
         raise HTTPException(status_code=400, detail="unknown command")
-    if len(param) != len(known[command]["params"]) or not all(p.strip() for p in param):
+    specs = known[command]["params"]
+    values = [p.strip() for p in param]
+    if len(values) != len(specs):
         raise HTTPException(status_code=400, detail="wrong parameters")
+    for spec, value in zip(specs, values):
+        if not value and not spec["optional"]:
+            raise HTTPException(status_code=400, detail=f"{spec['name']} is required")
+        if value and spec["choices"] and value not in spec["choices"]:
+            raise HTTPException(status_code=400, detail=f"invalid {spec['name']}")
     job_id = await _start_job(
         "diagnostics.sh",
-        ["--run-command", command, *[p.strip() for p in param]],
+        ["--run-command", command, *values],
         cancel_on_disconnect=True,
     )
     return _sse_output_fragment(job_id, "job-output")
