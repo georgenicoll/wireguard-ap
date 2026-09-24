@@ -11,7 +11,7 @@ REG_DOMAIN="${1:?usage: $0 <reg_domain>}"
 [[ $EUID -eq 0 ]] || exec sudo "$SCRIPT" "$@"
 
 apt-get update -y
-apt-get install -y hostapd dnsmasq nftables iw wireguard-tools openssl traceroute dnsutils
+apt-get install -y hostapd dnsmasq nftables iw wireguard-tools openssl traceroute dnsutils acl
 systemctl disable --now hostapd 2>/dev/null || true
 systemctl enable dnsmasq
 systemctl enable --now ssh

@@ -197,6 +197,10 @@ resource "terraform_data" "ap_deploy" {
   provisioner "remote-exec" {
     inline = [
       "chmod 600 ${local.remote_dir}/wireguard-ap.env",
+      # Holds the WireGuard private key until setup_wireguard.sh installs and
+      # deletes it. The web service's user can traverse this directory (see
+      # setup_webapp.sh), so it mustn't be readable by anyone else meanwhile.
+      "chmod 600 ${local.remote_dir}/.wg0.conf",
       "chmod +x ${join(" ", [for f in local.scripts : "${local.remote_dir}/${f}"])}",
       # Idempotent: only inserted once, guarded by the marker comment. Runs
       # as pi_user, not root - printed for this account's own logins only,

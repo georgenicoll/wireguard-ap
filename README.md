@@ -344,17 +344,18 @@ baked into the initial HTML, plus links to two status pages:
   `type?=A,MX` (optional pick one) - the page draws text boxes or drop-downs
   accordingly, and both the app and the script check them. Commands: `ping`,
   `traceroute`, `dig`, `ip-addr-list`, `ip-route-list`, `ip-route-get`,
-  `ap-clients` (runs the existing self-elevating view script), `service-status` and `logs` (fixed list of this project's
-  units).
+  `ap-clients` (runs the existing self-elevating view script),
+  `service-status` and `logs` (fixed list of this project's units).
 
   Commands that need root live in `scripts/diagnostics_sudo.sh` (currently
   `wg-status`), which speaks the same `--show-commands`/`--run-command`
   protocol: `diagnostics.sh` appends that script's `--show-commands` output
   to its own and hands any `--run-command` it doesn't recognise over to it,
   so it holds no knowledge of the root-only commands. Only `--run-command`
-  elevates (sudo), so `diagnostics_sudo.sh` needs its own sudoers entry
-  (step 2 above). `diagnostics_lib.sh` is the registry/argument-checking
-  code both scripts source.
+  elevates (sudo); the web service's own sudoers file (see "Security model"
+  below) already allows `diagnostics_sudo.sh --run-command <anything>`.
+  `diagnostics_lib.sh` is the registry/argument-checking code both scripts
+  source.
 - **`/manage`** — runs `setup_ap.sh`/`uplink_wifi.sh` with parameters chosen
   in the browser (mode, band, upstream SSID/password) and streams their
   output live rather than just showing a final result, using htmx's
@@ -395,13 +396,15 @@ https://<pi_host>/       # or https://<ap_ip>/ once joined to the AP - also link
   `# /// script ... ///` block at the top), and `uv run` resolves and caches
   an environment for them on the fly - editing that block is the only thing
   needed to add a dependency.
-- Runs as `pi_user`, not root, on `0.0.0.0:443` - reachable from `eth0`, the
-  AP's own Wi-Fi, and `wg0` alike. Binding the default HTTPS port without
-  being root comes from `CAP_NET_BIND_SERVICE`, granted to just this
-  service via `AmbientCapabilities=`/`CapabilityBoundingSet=` in
-  `mnh-ap-webapp.service` - not from running as root.
-- **HTTPS, self-signed**: `setup_webapp.sh` generates `webapp/cert.pem` /
-  `webapp/key.pem` with `openssl` the first time it runs (left alone on
+- Runs as its own unprivileged user `mnh-web` (not `pi_user`, not root) on
+  `0.0.0.0:443` - reachable from `eth0`, the AP's own Wi-Fi, and `wg0`
+  alike. Binding the default HTTPS port without being root comes from
+  `CAP_NET_BIND_SERVICE`, granted to just this service via
+  `AmbientCapabilities=` in `mnh-ap-webapp.service` - not from running as
+  root. See "Security model" below for why it isn't `pi_user`.
+- **HTTPS, self-signed**: `setup_webapp.sh` generates
+  `/var/lib/mnh-ap/cert.pem` / `key.pem` (owned by `mnh-web`, key `0600`)
+  with `openssl` the first time it runs (left alone on
   later runs, so redeploys don't force the browser to re-trust it). There's
   no real hostname to get a CA-signed cert for, so your browser will warn
   once - expected for a device like this, not a bug.
@@ -409,8 +412,36 @@ https://<pi_host>/       # or https://<ap_ip>/ once joined to the AP - also link
   against the AP's own Wi-Fi password (`PSK`) - one shared secret rather
   than a separate site password to remember. A signed session cookie
   (`itsdangerous`, `secure`-flagged since the site is HTTPS-only) persists
-  the login; its signing key (`webapp/.session_secret`) is generated once
-  on first run and kept, so a redeploy doesn't log everyone out.
+  the login; its signing key (`/var/lib/mnh-ap/.session_secret`) is generated
+  once on first run and kept, so a redeploy doesn't log everyone out.
+- **Security model**: the web app is the part of this project most exposed
+  to whatever is on the network, so it's kept unable to hurt anything else
+  if it's ever compromised:
+  - It runs as `mnh-web`, a system account with no shell and no home. The
+    scripts, `webapp/` and everything else deployed under `pi_user`'s home
+    are owned by `pi_user` - `mnh-web` can run the few it's allowed to but
+    can't change them (traverse-only access to the home directory via an
+    ACL; `.wg0.conf`, the env file and keys are `0600`). Had it run as
+    `pi_user`, code running in the app could have edited a script sudoers
+    lets root run, and so become root.
+  - `setup_webapp.sh` writes `/etc/sudoers.d/020-mnh-web-wireguard-ap`
+    (checked with `visudo -cf` before it's installed) allowing `mnh-web`
+    to sudo only `view_wireguard_status.sh`,
+    `view_currently_associated_clients.sh`, `shutdown_pi.sh` (with no
+    argument or `reboot`), `diagnostics_sudo.sh --run-command ...`,
+    `uplink_wifi.sh` (free-form SSID/password, so it validates its own
+    input) and `setup_ap.sh` with exactly `dual`, `uplink 5` or
+    `uplink 2.4`. No manual sudoers step is needed for it. `pi_user`'s own
+    sudoers file (step 2 above) is for you and the deploy, and no longer
+    has to list the scripts only the web app runs.
+  - Everything it writes (TLS key, session secret, uv's cache) is in
+    `/var/lib/mnh-ap`, owned by `mnh-web` and `0700`. A session secret or
+    key that was in `webapp/` (including one uploaded from a dev checkout)
+    is deleted on deploy and never used.
+  - `NoNewPrivileges`, `CapabilityBoundingSet` and `ProtectSystem`-style
+    sandboxing are deliberately *not* set on the unit: they apply to the
+    whole process tree, including `sudo` and the setup scripts it runs,
+    and would break them.
 - **SSID-branded, not hardcoded**: the page title/heading show the AP's
   actual configured SSID rather than a fixed name. `SSID` and `PSK` reach
   the app via `EnvironmentFile=` in `mnh-ap-webapp.service`, pointing at

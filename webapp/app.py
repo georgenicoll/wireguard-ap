@@ -303,14 +303,21 @@ def wireguard_info() -> dict:
 PSK = os.environ.get("PSK", "")
 
 # Persisted so a service restart (e.g. a redeploy) doesn't invalidate every
-# existing login session - generated once, on first run.
-SECRET_FILE = BASE_DIR / ".session_secret"
+# existing login session - generated once, on first run. Kept in STATE_DIR,
+# the app's own writable directory (setup_webapp.sh points it at
+# /var/lib/mnh-ap, owned by the service's user), not webapp/: that's
+# deployed read-only-to-the-service from the dev machine, which must never
+# be able to supply the signing key. Defaults to webapp/ for local dev.
+STATE_DIR = Path(os.environ.get("STATE_DIR", BASE_DIR))
+SECRET_FILE = STATE_DIR / ".session_secret"
 if SECRET_FILE.exists():
     SESSION_SECRET = SECRET_FILE.read_text().strip()
 else:
     SESSION_SECRET = secrets.token_hex(32)
-    SECRET_FILE.write_text(SESSION_SECRET)
-    SECRET_FILE.chmod(0o600)
+    # Created 0600 from the start, rather than written and then chmod-ed.
+    fd = os.open(SECRET_FILE, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(SESSION_SECRET)
 
 app = FastAPI()
 app.add_middleware(SessionMiddleware, secret_key=SESSION_SECRET, https_only=True)
@@ -594,7 +601,8 @@ if __name__ == "__main__":
         "app:app",
         host=os.environ.get("WEBAPP_HOST", "0.0.0.0"),
         # 443, the default HTTPS port - not privileged for this process
-        # despite running as pi_user, not root: mnh-ap-webapp.service
+        # despite running as an unprivileged user, not root (see
+        # setup_webapp.sh's WEB_USER): mnh-ap-webapp.service
         # grants just CAP_NET_BIND_SERVICE (see setup_webapp.sh), rather
         # than needing to run as root for this alone.
         port=int(os.environ.get("WEBAPP_PORT", "443")),
