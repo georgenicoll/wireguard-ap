@@ -229,6 +229,11 @@ select {
 .actions {
   text-align: right;
 }
+/* Pico makes [type=submit] buttons full-width, unlike the <a role="button">
+   used on the manage page - reset so a <button> sits right-aligned too. */
+.actions button {
+  width: auto;
+}
 
 /* Stat tiles (Host/AP/WireGuard) - small muted label above a bolder
    value, a few per card. auto-fit/minmax lets short values (a status
@@ -313,4 +318,20 @@ select {
   color: #422006 !important;
   background: #eab308 !important;
   border-color: #eab308 !important;
+}
+
+/* Pico makes every <select> full-width; "auto" sizes it to its widest
+   option instead (the Diagnostics page's command picker). */
+select.fit-content {
+  width: auto;
+}
+/* .field-row stretches its selects (flex: 1) to fill the line - keep this
+   one at its own width, next to its label. */
+.field-row select.fit-content {
+  flex: none;
+}
+
+/* Gap between the Diagnostics page's command picker and the card below it. */
+.diagnostic-picker {
+  margin-bottom: var(--pico-spacing);
 }

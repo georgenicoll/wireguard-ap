@@ -53,12 +53,12 @@ login banner - see below) is fetched automatically the first time you run
   self-elevates with `sudo` internally (`setup_host.sh`,
   `setup_wireguard.sh`, `setup_forwarding_and_nat.sh`, `setup_ap.sh`,
   `uplink_wifi.sh`, `setup_webapp.sh`, `view_currently_associated_clients.sh`,
-  `view_wireguard_status.sh`, `shutdown_pi.sh`), not root access in general:
+  `view_wireguard_status.sh`, `diagnostics_sudo.sh`, `shutdown_pi.sh`), not root access in general:
   ```bash
   PI_USER=changeme   # <-- OVERWRITE with your real pi_user before running this
 
   cat <<EOF | sudo tee "/etc/sudoers.d/010-${PI_USER}-wireguard-ap"
-  ${PI_USER} ALL=(root) NOPASSWD: /home/${PI_USER}/setup_host.sh, /home/${PI_USER}/setup_wireguard.sh, /home/${PI_USER}/setup_forwarding_and_nat.sh, NOPASSWD:SETENV: /home/${PI_USER}/setup_ap.sh, NOPASSWD: /home/${PI_USER}/uplink_wifi.sh, NOPASSWD: /home/${PI_USER}/setup_webapp.sh, NOPASSWD: /home/${PI_USER}/view_currently_associated_clients.sh, NOPASSWD: /home/${PI_USER}/view_wireguard_status.sh, NOPASSWD: /home/${PI_USER}/shutdown_pi.sh
+  ${PI_USER} ALL=(root) NOPASSWD: /home/${PI_USER}/setup_host.sh, /home/${PI_USER}/setup_wireguard.sh, /home/${PI_USER}/setup_forwarding_and_nat.sh, NOPASSWD:SETENV: /home/${PI_USER}/setup_ap.sh, NOPASSWD: /home/${PI_USER}/uplink_wifi.sh, NOPASSWD: /home/${PI_USER}/setup_webapp.sh, NOPASSWD: /home/${PI_USER}/view_currently_associated_clients.sh, NOPASSWD: /home/${PI_USER}/view_wireguard_status.sh, NOPASSWD: /home/${PI_USER}/diagnostics_sudo.sh, NOPASSWD: /home/${PI_USER}/shutdown_pi.sh
   EOF
   sudo chmod 0440 "/etc/sudoers.d/010-${PI_USER}-wireguard-ap"
   sudo visudo -c   # validates syntax - a bad sudoers file can lock out sudo entirely
@@ -125,6 +125,7 @@ the same shell, these are likely set already.
 **5. Verify.**
 
 ```bash
+./wga test                   # about a minute; see "Integration tests" below
 ssh <pi_user>@<pi_host> '~/view_currently_associated_clients.sh'      # add --ssh to also list SSH sessions
 ```
 
@@ -190,6 +191,7 @@ the comments in `main.tf`.
 ./wga apply
 ./wga output
 ./wga destroy
+./wga test        # integration tests - run after every apply (see below)
 ```
 
 ## Outputs
@@ -228,10 +230,10 @@ change.
 record of having deployed there — there's no destroy-time provisioner, so
 `hostapd`, `dnsmasq`, the NAT rule, the bridge and the uploaded scripts are
 left exactly as they were. To actually disable the AP, SSH in and stop/disable
-the relevant units by hand (`mnet-hostapd@*`, `dnsmasq`, `mnet-ap-nat`,
-`mnet-ap-local-routing`, `mnet-ap-wg-watchdog.timer`, `mnet-ap-webapp`), and
+the relevant units by hand (`mnh-hostapd@*`, `dnsmasq`, `mnh-ap-nat`,
+`mnh-ap-local-routing`, `mnh-ap-wg-watchdog.timer`, `mnh-ap-webapp`), and
 remove
-`/etc/NetworkManager/dispatcher.d/90-mnet-ap-wg-route-precedence` if you also
+`/etc/NetworkManager/dispatcher.d/90-mnh-ap-wg-route-precedence` if you also
 want the `wg0` route-precedence fix gone, or ask for a destroy-time
 provisioner to be added if you want `destroy` to do that automatically.
 
@@ -260,14 +262,14 @@ provisioner to be added if you want `destroy` to do that automatically.
   dynamic DNS (`dynu_hostname`), which can change - but `wg-quick` only
   resolves `Endpoint` once, at startup, so the tunnel would otherwise keep
   silently talking to a stale address until something re-resolves it.
-  `mnet-ap-wg-watchdog.sh`, run every minute by
-  `mnet-ap-wg-watchdog.timer`, is a port of OpenWRT's own
+  `mnh-ap-wg-watchdog.sh`, run every minute by
+  `mnh-ap-wg-watchdog.timer`, is a port of OpenWRT's own
   `wireguard_watchdog` (Jason A. Donenfeld / Aleksandr V. Piskunov,
   GPL-2.0 - see `/usr/bin/wireguard_watchdog` on an OpenWRT router): once
   `wg0`'s handshake has been stale for more than 150s, it re-resolves the
   peer's hostname in place via `wg set wg0 peer <key> endpoint host:port` -
   no interface restart, no route flap. (This is separate from
-  `mnet-ap-wg-route-precedence.sh`'s NetworkManager dispatcher hook, which
+  `mnh-ap-wg-route-precedence.sh`'s NetworkManager dispatcher hook, which
   handles *this Pi's own* address changing, not the peer's.)
 
   **Known, accepted trade-off**: if a peer's routed LAN (e.g. another site's
@@ -283,14 +285,14 @@ provisioner to be added if you want `destroy` to do that automatically.
   - **Connections into the Pi itself** (SSH, mainly) always keep replying via
     the interface they arrived on, regardless of any colliding route -
     `setup_forwarding_and_nat.sh` sets up policy routing for this (a
-    `mnet_ap_route` nftables table plus
-    `/usr/local/sbin/mnet-ap-local-routing.sh`), keyed on arrival interface
+    `mnh_ap_route` nftables table plus
+    `/usr/local/sbin/mnh-ap-local-routing.sh`), keyed on arrival interface
     rather than on any peer's registered subnet, so it protects management
     access generically against any current or future peer collision without
     needing to know about peer LANs at all.
   - **Everything else** - AP clients' own traffic, and any new connection the
     Pi itself initiates - deliberately prefers `wg0`:
-    `mnet-ap-wg-route-precedence.sh` (run after `wg-quick up` and on every
+    `mnh-ap-wg-route-precedence.sh` (run after `wg-quick up` and on every
     NetworkManager event, to survive a DHCP renewal resetting things) forces
     any `wg0` route to win over a colliding connected-interface route by
     metric, rather than leaving the kernel to pick unpredictably. This means
@@ -330,6 +332,32 @@ baked into the initial HTML, plus links to two status pages:
   the same `view_currently_associated_clients.sh` used from the CLI (see
   "What gets configured on the Pi" below). Always runs it without `--ssh`
   (SSH session details aren't exposed here).
+- **`/diagnostics`** — one card per command that `diagnostics.sh --show-commands`
+  lists (name, description, one text box per parameter, a Run button); Run
+  calls `diagnostics.sh --run-command <name> <args...>` and streams the output
+  into a modal the same way `/manage` does. The page knows nothing about
+  specific commands: to add one, write a `cmd_<name>` function in
+  `scripts/diagnostics.sh` and `register` it. The script runs as the web
+  user (no sudo), validates its own arguments, and the app only ever passes
+  them to it as separate exec args (never via a shell), for commands the
+  script itself advertised.
+  Parameters are declared in the `--show-commands` line: `host` (required
+  text), `server?` (optional text), `unit=a,b,c` (pick one) or
+  `type?=A,MX` (optional pick one) - the page draws text boxes or drop-downs
+  accordingly, and both the app and the script check them. Commands: `ping`,
+  `traceroute`, `dig`, `ip-addr-list`, `ip-route-list`, `ip-route-get`,
+  `ap-clients` (runs the existing self-elevating view script),
+  `service-status` and `logs` (fixed list of this project's units).
+
+  Commands that need root live in `scripts/diagnostics_sudo.sh` (currently
+  `wg-status`), which speaks the same `--show-commands`/`--run-command`
+  protocol: `diagnostics.sh` appends that script's `--show-commands` output
+  to its own and hands any `--run-command` it doesn't recognise over to it,
+  so it holds no knowledge of the root-only commands. Only `--run-command`
+  elevates (sudo); the web service's own sudoers file (see "Security model"
+  below) already allows `diagnostics_sudo.sh --run-command <anything>`.
+  `diagnostics_lib.sh` is the registry/argument-checking code both scripts
+  source.
 - **`/manage`** — runs `setup_ap.sh`/`uplink_wifi.sh` with parameters chosen
   in the browser (mode, band, upstream SSID/password) and streams their
   output live rather than just showing a final result, using htmx's
@@ -364,19 +392,21 @@ https://<pi_host>/       # or https://<ap_ip>/ once joined to the AP - also link
 - **`setup_webapp.sh`** installs [uv](https://docs.astral.sh/uv/) system-wide
   (`/usr/local/bin`, so it's on `PATH` for both this script and the service
   below, whichever user runs each), then runs `webapp/app.py` as
-  `mnet-ap-webapp.service` via `uv run app.py`. There's no `requirements.txt`
+  `mnh-ap-webapp.service` via `uv run app.py`. There's no `requirements.txt`
   or venv to manage by hand: `app.py` declares its own dependencies with
   [PEP 723](https://peps.python.org/pep-0723/) inline script metadata (the
   `# /// script ... ///` block at the top), and `uv run` resolves and caches
   an environment for them on the fly - editing that block is the only thing
   needed to add a dependency.
-- Runs as `pi_user`, not root, on `0.0.0.0:443` - reachable from `eth0`, the
-  AP's own Wi-Fi, and `wg0` alike. Binding the default HTTPS port without
-  being root comes from `CAP_NET_BIND_SERVICE`, granted to just this
-  service via `AmbientCapabilities=`/`CapabilityBoundingSet=` in
-  `mnet-ap-webapp.service` - not from running as root.
-- **HTTPS, self-signed**: `setup_webapp.sh` generates `webapp/cert.pem` /
-  `webapp/key.pem` with `openssl` the first time it runs (left alone on
+- Runs as its own unprivileged user `mnh-web` (not `pi_user`, not root) on
+  `0.0.0.0:443` - reachable from `eth0`, the AP's own Wi-Fi, and `wg0`
+  alike. Binding the default HTTPS port without being root comes from
+  `CAP_NET_BIND_SERVICE`, granted to just this service via
+  `AmbientCapabilities=` in `mnh-ap-webapp.service` - not from running as
+  root. See "Security model" below for why it isn't `pi_user`.
+- **HTTPS, self-signed**: `setup_webapp.sh` generates
+  `/var/lib/mnh-ap/cert.pem` / `key.pem` (owned by `mnh-web`, key `0600`)
+  with `openssl` the first time it runs (left alone on
   later runs, so redeploys don't force the browser to re-trust it). There's
   no real hostname to get a CA-signed cert for, so your browser will warn
   once - expected for a device like this, not a bug.
@@ -384,11 +414,51 @@ https://<pi_host>/       # or https://<ap_ip>/ once joined to the AP - also link
   against the AP's own Wi-Fi password (`PSK`) - one shared secret rather
   than a separate site password to remember. A signed session cookie
   (`itsdangerous`, `secure`-flagged since the site is HTTPS-only) persists
-  the login; its signing key (`webapp/.session_secret`) is generated once
-  on first run and kept, so a redeploy doesn't log everyone out.
+  the login; its signing key (`/var/lib/mnh-ap/.session_secret`) is generated
+  once on first run and kept, so a redeploy doesn't log everyone out. The
+  cookie holds only `{"authenticated": true, "login_at": <unix time>}`
+  (signed, not encrypted, and never the password). Two limits apply, both
+  enforced by the server from the signed cookie rather than by the browser
+  dropping it: a login ends after **one hour of inactivity** (sliding - every
+  authenticated page load issues a fresh cookie; `SESSION_LIFETIME_SECONDS`
+  in `app.py`), and after **4 hours from the login itself** however active
+  you've been (`SESSION_ABSOLUTE_LIMIT_SECONDS`; `login_at` is never
+  rewritten by the sliding refresh). A cookie with no usable `login_at` -
+  such as one from before the cap existed - counts as expired. Sessions are
+  stateless, so there's nothing to revoke early: logging out clears your
+  browser's copy, and the only way to invalidate every existing cookie is to
+  delete `/var/lib/mnh-ap/.session_secret` and restart the service.
+- **Security model**: the web app is the part of this project most exposed
+  to whatever is on the network, so it's kept unable to hurt anything else
+  if it's ever compromised:
+  - It runs as `mnh-web`, a system account with no shell and no home. The
+    scripts, `webapp/` and everything else deployed under `pi_user`'s home
+    are owned by `pi_user` - `mnh-web` can run the few it's allowed to but
+    can't change them (traverse-only access to the home directory via an
+    ACL; `.wg0.conf`, the env file and keys are `0600`). Had it run as
+    `pi_user`, code running in the app could have edited a script sudoers
+    lets root run, and so become root.
+  - `setup_webapp.sh` writes `/etc/sudoers.d/020-mnh-web-wireguard-ap`
+    (checked with `visudo -cf` before it's installed) allowing `mnh-web`
+    to sudo only `view_wireguard_status.sh`,
+    `view_currently_associated_clients.sh`, `shutdown_pi.sh` (with no
+    argument or `reboot`), `diagnostics_sudo.sh --run-command ...`,
+    `uplink_wifi.sh` (free-form SSID/password, so it validates its own
+    input) and `setup_ap.sh` with exactly `dual`, `uplink 5` or
+    `uplink 2.4`. No manual sudoers step is needed for it. `pi_user`'s own
+    sudoers file (step 2 above) is for you and the deploy, and no longer
+    has to list the scripts only the web app runs.
+  - Everything it writes (TLS key, session secret, uv's cache) is in
+    `/var/lib/mnh-ap`, owned by `mnh-web` and `0700`. A session secret or
+    key that was in `webapp/` (including one uploaded from a dev checkout)
+    is deleted on deploy and never used.
+  - `NoNewPrivileges`, `CapabilityBoundingSet` and `ProtectSystem`-style
+    sandboxing are deliberately *not* set on the unit: they apply to the
+    whole process tree, including `sudo` and the setup scripts it runs,
+    and would break them.
 - **SSID-branded, not hardcoded**: the page title/heading show the AP's
   actual configured SSID rather than a fixed name. `SSID` and `PSK` reach
-  the app via `EnvironmentFile=` in `mnet-ap-webapp.service`, pointing at
+  the app via `EnvironmentFile=` in `mnh-ap-webapp.service`, pointing at
   the same `wireguard-ap.env` the shell scripts already source - no
   separate config to maintain.
 - **htmx is vendored** (`webapp/static/htmx.min.js`, `htmx-ext-sse.js`), not
@@ -408,9 +478,10 @@ https://<pi_host>/       # or https://<ap_ip>/ once joined to the AP - also link
 
 `./dev_webapp.sh` runs the web UI locally with hot reload, so UI changes
 (templates, `static/`, `app.py`) can be iterated on without deploying to
-the Pi each time. It generates a `webapp/dev-cert.pem`/`dev-key.pem`
-self-signed cert for `localhost` (gitignored, separate from the Pi's own
-`cert.pem`/`key.pem`), sets a dummy `SSID`/`PSK` (override by exporting
+the Pi each time. It generates a self-signed cert for `localhost` in `.dev/`
+(`dev-cert.pem`/`dev-key.pem`, git-ignored, and outside `webapp/` so it's
+never uploaded to the Pi; separate from the Pi's own certificate), keeps
+its session secret there too, sets a dummy `SSID`/`PSK` (override by exporting
 `PSK` beforehand), and serves on `https://127.0.0.1:8443/` via
 `uv run app.py` with `uvicorn --reload` enabled. The login password is
 printed to the console on startup.
@@ -421,6 +492,44 @@ real network interfaces (hostapd, nftables, etc.), and aren't even at the
 path `app.py` looks for them locally (see `SCRIPTS_DIR`'s comment). This
 is for iterating on layout/styling/flow, not exercising the Pi-side
 scripts.
+
+## Integration tests
+
+`./wga apply` prints a reminder to run these when it finishes. They're not run
+automatically: they take about a minute, log in to the Pi's web UI and use a
+real browser, and you may not want that on every apply.
+
+```bash
+./wga test                # local + smoke + ui - the normal post-apply check
+./wga test smoke          # just the Pi's state and the web app over HTTPS (~30s)
+./wga test local          # no Pi needed - safe to run any time, e.g. before an apply
+./wga test reboot         # opt-in: restarts the Pi and checks it comes back healthy
+./wga test all            # everything, including the reboot
+./wga test smoke -k logs  # anything else is passed to pytest
+```
+
+`tests/integration.py` is a [uv](https://docs.astral.sh/uv/) script (its
+`pytest`, `httpx` and `playwright` dependencies are declared inline, like
+`app.py`'s), so there's nothing to install. The Pi tiers read `pi_host`,
+`pi_user`, `ssh_private_key_path`, `mode` and `psk` from the tfvars file
+`WGA_CONFIG` points at - the same one `./wga apply` uses. The password is held
+in memory only and never printed or written anywhere.
+
+| Tier | Needs the Pi | What it checks |
+|---|---|---|
+| `local` | no | The diagnostics scripts' argument handling, including injection attempts (`;`, `$(...)`, backticks, newlines, option-like values, choice values with commas, unknown or crafted command names) - and that they run nothing. The generated sudoers file for the web user is valid and hasn't been widened. The UI, in a browser, against a throwaway copy of the web app on a spare port (it never touches any other server). |
+| `smoke` | yes (SSH + HTTPS) | Every service enabled and active, no failed units, the web app running as `mnh-web` on 443, the routing-protection rules in place, permissions (private state directory, traverse-only ACL on the home directory, scripts `755` and owned by the deploy user, nothing writable by the web user), no leftover secrets, dev files or old `mnet` names on the Pi. Pages need a login and the session cookie is `Secure`/`HttpOnly`/`SameSite`. Every read-only page and diagnostic returns real data (including the ones that go through `sudo`), bad or malicious requests are refused and run nothing, and a `ping` stops when its stream is dropped. |
+| `ui` | yes | The same browser checks as `local`, against the real Pi: the picker, the cards, Run button placement, optional and choice fields, `ping` running until the dialog is closed (button or Esc) and then stopping, output that follows at the bottom. Needs Chromium: if it's missing the test says to run `uv run --with playwright playwright install chromium`. |
+| `reboot` | yes | Opt-in. Clicks **Restart** in the UI, waits for the "restarting" page to return to the login, confirms the Pi has a new boot id, then waits for every service, the routing protection and the web app to be healthy again. Takes a few minutes and briefly takes the AP down - don't run it while relying on the Pi. |
+
+The Pi tiers are read-only apart from starting and stopping a `ping`; only
+`reboot` changes anything. A failing run doesn't undo the deploy - the
+output names what's wrong.
+
+To add a check, add a test to `tests/integration.py` and mark it with its
+tier (`@pytest.mark.smoke` and so on). A new diagnostic command needs no
+test changes for the page itself, but should get a case in the `smoke`
+diagnostics tests (and, if it takes free text, in the injection tests).
 
 ## Notes
 
@@ -464,7 +573,8 @@ scripts.
 ## Layout
 
 ```
-wga                             driver script: ./wga <tofu command>
+wga                             driver script: ./wga <tofu command> | ./wga test
+tests/integration.py            integration tests (uv script) - see "Integration tests"
 wireguard-ap.example.tfvars     template for your private config file
 main.tf / variables.tf / outputs.tf / versions.tf
 templates/wireguard-ap.env.tftpl
@@ -478,6 +588,9 @@ scripts/setup_ap.sh
 scripts/uplink_wifi.sh
 scripts/view_currently_associated_clients.sh
 scripts/view_wireguard_status.sh
+scripts/diagnostics.sh          Diagnostics page commands (--show-commands / --run-command)
+scripts/diagnostics_sudo.sh     the root-only ones, same protocol; diagnostics.sh delegates to it
+scripts/diagnostics_lib.sh      registry/argument checking both source
 scripts/setup_webapp.sh
 scripts/shutdown_pi.sh
 webapp/app.py

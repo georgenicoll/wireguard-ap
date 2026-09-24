@@ -102,7 +102,7 @@ variable "lease" {
 # --- WireGuard uplink to wireguard-router -----------------------------------
 
 variable "wireguard_client_name" {
-  description = "This Pi's peer name in wireguard-router's key store (e.g. \"mnet-on-the-road\"), used by wga to fetch its client config via wireguard-router's scripts/wg-peer.sh. See README for how wga locates that script."
+  description = "This Pi's peer name in wireguard-router's key store (e.g. \"wireguard-ap-peer\"), used by wga to fetch its client config via wireguard-router's scripts/wg-peer.sh. See README for how wga locates that script."
   type        = string
 }
 

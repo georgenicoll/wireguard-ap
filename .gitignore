@@ -32,3 +32,6 @@ __pycache__/
 # webapp/ runtime artifacts generated on the Pi (or locally, if testing
 # with "uv run") - never meant to be committed.
 webapp/.session_secret
+
+# Local dev state (dev_webapp.sh): self-signed cert/key, session secret.
+.dev/

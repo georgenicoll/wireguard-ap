@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>mnh-ap - Diagnostics</title>
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+  <link rel="stylesheet" href="/static/pico.min.css">
+  <link rel="stylesheet" href="/static/site.css">
+  <script src="/static/htmx.min.js"></script>
+  <script src="/static/htmx-ext-sse.js"></script>
+  <script src="/static/output-follow.js" defer></script>
+</head>
+<body>
+  {% include "_header.html" %}
+  {% include "_nav.html" %}
+  <main>
+    {% if commands %}
+    <div class="field-row diagnostic-picker">
+      <label for="diagnostic-select">Diagnostic</label>
+      <select id="diagnostic-select" class="fit-content" onchange="showDiagnostic(this.value)">
+        <option value="" selected disabled hidden>Choose a diagnostic...</option>
+        {% for cmd in commands %}
+        <option value="{{ cmd.name }}">{{ cmd.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    {% endif %}
+
+    <div class="cards">
+    {% for cmd in commands %}
+    <article data-command="{{ cmd.name }}" hidden>
+      <p>{{ cmd.description }}</p>
+      {# onsubmit only fires once native validation (required) has passed. #}
+      <form hx-post="/run/diagnostics" hx-target="#job-output" hx-swap="outerHTML"
+        hx-disabled-elt="find button" onsubmit="showOutput({{ (cmd.name ~ ' output')|tojson|forceescape }})">
+        <input type="hidden" name="command" value="{{ cmd.name }}">
+        {% for p in cmd.params %}
+        {% set field_id = cmd.name ~ "-" ~ loop.index %}
+        <label for="{{ field_id }}">{{ p.name }}{% if p.optional %} (optional){% endif %}</label>
+        {% if p.choices %}
+        <select id="{{ field_id }}" name="param"{% if not p.optional %} required{% endif %}>
+          {% if p.optional %}<option value="" selected></option>{% endif %}
+          {% for c in p.choices %}<option value="{{ c }}">{{ c }}</option>{% endfor %}
+        </select>
+        {% else %}
+        <input type="text" id="{{ field_id }}" name="param"{% if not p.optional %} required{% endif %}>
+        {% endif %}
+        {% endfor %}
+        <p class="actions">
+          <button type="submit" class="secondary">Run</button>
+        </p>
+      </form>
+    </article>
+    {% else %}
+    <article>
+      <header>No diagnostics available</header>
+      <p>diagnostics.sh didn't list any commands.</p>
+    </article>
+    {% endfor %}
+    </div>
+  </main>
+
+  <dialog id="output-dialog" onclose="resetOutput()">
+    <article>
+      <header id="output-heading">Output</header>
+      <pre id="job-output" class="output"></pre>
+      <footer>
+        <a role="button" class="secondary"
+          onclick="document.getElementById('output-dialog').close()">Close</a>
+      </footer>
+    </article>
+  </dialog>
+
+  <script>
+    // Only the chosen diagnostic's card is shown; "" (the initial,
+    // unlisted "Choose a diagnostic..." placeholder) hides them all.
+    function showDiagnostic(name) {
+      document.querySelectorAll('article[data-command]').forEach(function (a) {
+        a.hidden = a.dataset.command !== name;
+      });
+    }
+
+    // Browsers restore a <select>'s value on reload/back but not the
+    // cards' hidden state, so re-sync them. pageshow also covers the
+    // back/forward cache.
+    window.addEventListener('pageshow', function () {
+      const select = document.getElementById('diagnostic-select');
+      if (select) showDiagnostic(select.value);
+    });
+
+    function showOutput(heading) {
+      document.getElementById('output-heading').textContent = heading;
+      document.getElementById('output-dialog').showModal();
+    }
+
+    // Swapping the output element out (through htmx, so its SSE extension
+    // notices) closes the event stream, which is what tells the server to
+    // interrupt a still-running command - e.g. a ping with no end.
+    // Fires however the dialog closes (button, Esc), and also leaves a
+    // fresh, empty target for the next run.
+    function resetOutput() {
+      htmx.swap('#job-output', '<pre id="job-output" class="output"></pre>',
+        {swapStyle: 'outerHTML'});
+    }
+  </script>
+</body>
+</html>

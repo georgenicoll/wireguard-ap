@@ -14,8 +14,10 @@ import logging
 import os
 import re
 import secrets
+import signal
 import socket
 import subprocess
+import time
 import uuid
 from pathlib import Path
 
@@ -92,9 +94,17 @@ def _run_script(name: str, timeout: float = 10) -> str:
 # EventSource opened) leaks its dict entry until the process exits, but
 # never runs longer than the underlying script does.
 _jobs: dict[str, asyncio.subprocess.Process] = {}
+# Jobs to interrupt (Ctrl+C) if their output stream goes away before they
+# finish - the browser closed the output dialog or left the page. Opt-in:
+# for setup_ap.sh and friends a closed tab must *not* stop a half-applied
+# network change, whereas an open-ended diagnostic (ping) would otherwise
+# run forever with nobody watching.
+_cancel_on_disconnect: set[str] = set()
 
 
-async def _start_job(name: str, args: list[str]) -> str:
+async def _start_job(
+    name: str, args: list[str], cancel_on_disconnect: bool = False
+) -> str:
     # setup_ap.sh and uplink_wifi.sh both self-elevate internally (sudo,
     # NOPASSWD - see the README's sudoers section), same as _run_script.
     process = await asyncio.create_subprocess_exec(
@@ -102,10 +112,26 @@ async def _start_job(name: str, args: list[str]) -> str:
         *args,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
+        # Own process group, so the interrupt below reaches the tool the
+        # script is running (ping), not just the script waiting on it.
+        start_new_session=cancel_on_disconnect,
     )
     job_id = uuid.uuid4().hex
     _jobs[job_id] = process
+    if cancel_on_disconnect:
+        _cancel_on_disconnect.add(job_id)
     return job_id
+
+
+async def _reap_interrupted(process: asyncio.subprocess.Process) -> None:
+    try:
+        await asyncio.wait_for(process.wait(), timeout=5)
+    except asyncio.TimeoutError:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        await process.wait()
 
 
 def _sse_output_fragment(job_id: str, output_id: str) -> str:
@@ -129,16 +155,32 @@ async def _stream_job(job_id: str):
     if process is None or process.stdout is None:
         yield "event: done\ndata: (no such job - already finished, or never started)\n\n"
         return
-    while True:
-        line = await process.stdout.readline()
-        if not line:
-            break
-        text = html.escape(line.decode(errors="replace").rstrip("\n"))
-        yield f"data: {text}<br>\n\n"
-    returncode = await process.wait()
-    yield f"data: <br>[exit code {returncode}]<br>\n\n"
-    yield "event: done\ndata: \n\n"
-    _jobs.pop(job_id, None)
+    try:
+        while True:
+            line = await process.stdout.readline()
+            if not line:
+                break
+            text = html.escape(line.decode(errors="replace").rstrip("\n"))
+            yield f"data: {text}<br>\n\n"
+        returncode = await process.wait()
+        yield f"data: <br>[exit code {returncode}]<br>\n\n"
+        yield "event: done\ndata: \n\n"
+    finally:
+        _jobs.pop(job_id, None)
+        if job_id in _cancel_on_disconnect:
+            _cancel_on_disconnect.discard(job_id)
+            if process.returncode is None:
+                # Client went away mid-run. No awaiting here: this can be
+                # running under a cancelled scope, where any await would be
+                # cancelled again straight away - so the interrupt is sent
+                # synchronously and the follow-up (SIGKILL if it ignores
+                # it, and reaping) handed to a separate task.
+                LOGGER.info("Output stream closed, interrupting job %s", job_id)
+                try:
+                    os.killpg(process.pid, signal.SIGINT)
+                except ProcessLookupError:
+                    pass
+                asyncio.create_task(_reap_interrupted(process))
 
 
 def _interface_info(name: str) -> dict:
@@ -262,17 +304,43 @@ def wireguard_info() -> dict:
 PSK = os.environ.get("PSK", "")
 
 # Persisted so a service restart (e.g. a redeploy) doesn't invalidate every
-# existing login session - generated once, on first run.
-SECRET_FILE = BASE_DIR / ".session_secret"
+# existing login session - generated once, on first run. Kept in STATE_DIR,
+# the app's own writable directory (setup_webapp.sh points it at
+# /var/lib/mnh-ap, owned by the service's user), not webapp/: that's
+# deployed read-only-to-the-service from the dev machine, which must never
+# be able to supply the signing key. Defaults to webapp/ for local dev.
+STATE_DIR = Path(os.environ.get("STATE_DIR", BASE_DIR))
+SECRET_FILE = STATE_DIR / ".session_secret"
 if SECRET_FILE.exists():
     SESSION_SECRET = SECRET_FILE.read_text().strip()
 else:
     SESSION_SECRET = secrets.token_hex(32)
-    SECRET_FILE.write_text(SESSION_SECRET)
-    SECRET_FILE.chmod(0o600)
+    # Created 0600 from the start, rather than written and then chmod-ed.
+    fd = os.open(SECRET_FILE, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(SESSION_SECRET)
 
 app = FastAPI()
-app.add_middleware(SessionMiddleware, secret_key=SESSION_SECRET, https_only=True)
+# How long a login survives without being used, then it's the login page
+# again. Sliding: every authenticated page load (see require_login) issues a
+# fresh cookie, so an hour of *inactivity* logs you out, not an hour since
+# you logged in. The cookie carries its own signed timestamp, so this is
+# enforced by the server, not just by the browser expiring the cookie.
+# (Sessions are stateless - nothing to revoke early short of changing
+# SESSION_SECRET - so a short lifetime is what limits a stolen cookie.)
+SESSION_LIFETIME_SECONDS = 60 * 60
+# ...but never longer than this from the login itself, however active you
+# are: sliding expiry alone would let a stolen cookie that keeps being used
+# live forever. Enforced in require_login from "login_at", which lives in
+# the signed cookie and is never rewritten by the sliding refresh.
+SESSION_ABSOLUTE_LIMIT_SECONDS = 4 * 60 * 60
+
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=SESSION_SECRET,
+    https_only=True,
+    max_age=SESSION_LIFETIME_SECONDS,
+)
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 templates = Jinja2Templates(directory=BASE_DIR / "templates")
 
@@ -294,6 +362,20 @@ async def no_cache_static(request: Request, call_next):
 def require_login(request: Request) -> None:
     if not request.session.get("authenticated"):
         raise HTTPException(status_code=303, headers={"Location": "/login"})
+    # Absolute cap. A cookie with no (or an unusable) login time - one issued
+    # before this existed, or a clock that has jumped backwards - counts as
+    # expired rather than being let through: fail closed.
+    login_at = request.session.get("login_at")
+    age = time.time() - login_at if isinstance(login_at, (int, float)) else None
+    if age is None or not 0 <= age <= SESSION_ABSOLUTE_LIMIT_SECONDS:
+        request.session.clear()
+        raise HTTPException(status_code=303, headers={"Location": "/login"})
+    # Sliding expiry: writing the session back (even unchanged) makes the
+    # middleware issue the cookie again, with a fresh signed timestamp - so
+    # the hour restarts on every page load. Newer Starlette only sends the
+    # cookie for a *modified* session (older versions sent it whenever there
+    # was one), so this is what keeps the behaviour the same on either.
+    request.session["authenticated"] = True
 
 
 @app.get("/", response_class=HTMLResponse, dependencies=[Depends(require_login)])
@@ -370,6 +452,92 @@ async def start_uplink_wifi(ssid: str = Form(...), password: str = Form("")):
     return _sse_output_fragment(job_id, "job-output")
 
 
+_PARAM_TOKEN = re.compile(r"([A-Za-z0-9_.@:-]+)(\?)?(?:=(\S+))?")
+
+
+def _parse_param(token: str) -> dict:
+    # "host" (required text), "server?" (optional text), "unit=a,b" (pick
+    # one) or "type?=a,b" (optional pick one) - see diagnostics.sh's header.
+    match = _PARAM_TOKEN.fullmatch(token)
+    if not match:
+        return {"name": token, "optional": False, "choices": []}
+    name, optional, choices = match.groups()
+    return {
+        "name": name,
+        "optional": bool(optional),
+        "choices": choices.split(",") if choices else [],
+    }
+
+
+def _diagnostic_commands() -> list[dict]:
+    # diagnostics.sh --show-commands prints one "<name> [<param> ...] |
+    # <description>" line per command - the page is built entirely from
+    # this, so adding a command means only editing the script.
+    try:
+        result = subprocess.run(
+            [str(SCRIPTS_DIR / "diagnostics.sh"), "--show-commands"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired) as e:
+        LOGGER.info("Failed to list diagnostics commands: %s", e)
+        return []
+    commands = []
+    for line in result.stdout.splitlines():
+        signature, _, description = line.partition("|")
+        words = signature.split()
+        if words:
+            commands.append(
+                {
+                    "name": words[0],
+                    "params": [_parse_param(w) for w in words[1:]],
+                    "description": description.strip(),
+                }
+            )
+    return sorted(commands, key=lambda c: c["name"])
+
+
+@app.get(
+    "/diagnostics", response_class=HTMLResponse, dependencies=[Depends(require_login)]
+)
+def diagnostics(request: Request):
+    return templates.TemplateResponse(
+        request, "diagnostics.html", {"commands": _diagnostic_commands()}
+    )
+
+
+@app.post(
+    "/run/diagnostics",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_login)],
+)
+async def start_diagnostic(command: str = Form(...), param: list[str] = Form([])):
+    # Only commands the script itself advertises, with one value per param
+    # - blank only where the param is optional, and (for a choice param)
+    # only one of the advertised choices. Anything beyond that (validating
+    # free text) is the script's job, which re-checks all of this too. A
+    # blank optional value is still sent, as "", to keep args positional.
+    known = {c["name"]: c for c in await asyncio.to_thread(_diagnostic_commands)}
+    if command not in known:
+        raise HTTPException(status_code=400, detail="unknown command")
+    specs = known[command]["params"]
+    values = [p.strip() for p in param]
+    if len(values) != len(specs):
+        raise HTTPException(status_code=400, detail="wrong parameters")
+    for spec, value in zip(specs, values):
+        if not value and not spec["optional"]:
+            raise HTTPException(status_code=400, detail=f"{spec['name']} is required")
+        if value and spec["choices"] and value not in spec["choices"]:
+            raise HTTPException(status_code=400, detail=f"invalid {spec['name']}")
+    job_id = await _start_job(
+        "diagnostics.sh",
+        ["--run-command", command, *values],
+        cancel_on_disconnect=True,
+    )
+    return _sse_output_fragment(job_id, "job-output")
+
+
 @app.get("/run/stream/{job_id}", dependencies=[Depends(require_login)])
 async def stream_job(job_id: str):
     return StreamingResponse(_stream_job(job_id), media_type="text/event-stream")
@@ -441,6 +609,7 @@ def login_form(request: Request):
 def login(request: Request, password: str = Form(...)):
     if secrets.compare_digest(password, PSK):
         request.session["authenticated"] = True
+        request.session["login_at"] = int(time.time())
         return RedirectResponse("/", status_code=303)
     return templates.TemplateResponse(
         request,
@@ -467,7 +636,8 @@ if __name__ == "__main__":
         "app:app",
         host=os.environ.get("WEBAPP_HOST", "0.0.0.0"),
         # 443, the default HTTPS port - not privileged for this process
-        # despite running as pi_user, not root: mnet-ap-webapp.service
+        # despite running as an unprivileged user, not root (see
+        # setup_webapp.sh's WEB_USER): mnh-ap-webapp.service
         # grants just CAP_NET_BIND_SERVICE (see setup_webapp.sh), rather
         # than needing to run as root for this alone.
         port=int(os.environ.get("WEBAPP_PORT", "443")),

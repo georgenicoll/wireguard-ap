@@ -9,12 +9,12 @@ source "$ENV_FILE"
 
 [[ $EUID -eq 0 ]] || exec sudo "$SCRIPT" "$@"
 
-echo "net.ipv4.ip_forward=1" | tee /etc/sysctl.d/90-mnet-ap.conf >/dev/null
+echo "net.ipv4.ip_forward=1" | tee /etc/sysctl.d/90-mnh-ap.conf >/dev/null
 sysctl -w net.ipv4.ip_forward=1
 
 # === write everything first, then load it all at the end (in dependency ====
 # order) - writing config and reloading a service interleaved is how the
-# mnet_ap_route table below once went missing: mnet-ap-nat.service got
+# mnh_ap_route table below once went missing: mnh-ap-nat.service got
 # restarted while the file only had the NAT table on disk, and nothing
 # reloaded it again after the rest was appended.
 
@@ -24,10 +24,10 @@ sysctl -w net.ipv4.ip_forward=1
 # tunnel keeps each AP client's real source address rather than all of them
 # collapsing into the Pi's own tunnel IP. Only the real internet uplink
 # (eth0/wlan0) gets masqueraded.
-tee /etc/nftables-mnet-ap.conf >/dev/null <<EOF
-add table ip mnet_ap
-delete table ip mnet_ap
-table ip mnet_ap {
+tee /etc/nftables-mnh-ap.conf >/dev/null <<EOF
+add table ip mnh_ap
+delete table ip mnh_ap
+table ip mnh_ap {
   chain postrouting {
     type nat hook postrouting priority srcnat; policy accept;
     ip saddr ${AP_NET} oifname != "${BR}" oifname != "wg0" masquerade
@@ -56,11 +56,11 @@ EOF
 # packet on every run is cheap and covers that case too: the next inbound
 # packet of an already-established connection gets it (re-)tagged just the
 # same as a new one would.
-tee -a /etc/nftables-mnet-ap.conf >/dev/null <<EOF
+tee -a /etc/nftables-mnh-ap.conf >/dev/null <<EOF
 
-add table ip mnet_ap_route
-delete table ip mnet_ap_route
-table ip mnet_ap_route {
+add table ip mnh_ap_route
+delete table ip mnh_ap_route
+table ip mnh_ap_route {
   chain input {
     type filter hook input priority mangle; policy accept;
     iifname "eth0" ct mark set 0x1
@@ -73,17 +73,17 @@ table ip mnet_ap_route {
 }
 EOF
 
-tee /etc/systemd/system/mnet-ap-nat.service >/dev/null <<'EOF'
+tee /etc/systemd/system/mnh-ap-nat.service >/dev/null <<'EOF'
 [Unit]
-Description=NAT for mnet-ap AP
+Description=NAT for mnh-ap AP
 After=network-pre.target
 Wants=network-pre.target
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/usr/sbin/nft -f /etc/nftables-mnet-ap.conf
-ExecStop=/bin/sh -c '/usr/sbin/nft delete table ip mnet_ap 2>/dev/null; /usr/sbin/nft delete table ip mnet_ap_route 2>/dev/null; true'
+ExecStart=/usr/sbin/nft -f /etc/nftables-mnh-ap.conf
+ExecStop=/bin/sh -c '/usr/sbin/nft delete table ip mnh_ap 2>/dev/null; /usr/sbin/nft delete table ip mnh_ap_route 2>/dev/null; true'
 
 [Install]
 WantedBy=multi-user.target
@@ -91,7 +91,7 @@ EOF
 
 {
   echo '#!/usr/bin/env bash'
-  echo '# Regenerates the per-interface routing tables the mnet_ap_route nft'
+  echo '# Regenerates the per-interface routing tables the mnh_ap_route nft'
   echo '# marks above send marked replies through. Safe to re-run.'
   echo 'set -euo pipefail'
   printf 'BR=%q\n' "$BR"
@@ -115,20 +115,20 @@ setup_table() {
 setup_table 0x1 101 eth0
 setup_table 0x2 102 "$BR"
 SCRIPT
-} | tee /usr/local/sbin/mnet-ap-local-routing.sh >/dev/null
-chmod 755 /usr/local/sbin/mnet-ap-local-routing.sh
+} | tee /usr/local/sbin/mnh-ap-local-routing.sh >/dev/null
+chmod 755 /usr/local/sbin/mnh-ap-local-routing.sh
 
-tee /etc/systemd/system/mnet-ap-local-routing.service >/dev/null <<'EOF'
+tee /etc/systemd/system/mnh-ap-local-routing.service >/dev/null <<'EOF'
 [Unit]
-Description=Per-interface reply routing for mnet-ap local connections
-After=network-online.target mnet-ap-nat.service
+Description=Per-interface reply routing for mnh-ap local connections
+After=network-online.target mnh-ap-nat.service
 Wants=network-online.target
-Requires=mnet-ap-nat.service
+Requires=mnh-ap-nat.service
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/usr/local/sbin/mnet-ap-local-routing.sh
+ExecStart=/usr/local/sbin/mnh-ap-local-routing.sh
 ExecStop=/bin/true
 
 [Install]
@@ -138,11 +138,11 @@ EOF
 # === now load everything, in dependency order ===============================
 systemctl daemon-reload
 
-systemctl enable mnet-ap-nat.service
+systemctl enable mnh-ap-nat.service
 # "enable --now" is a no-op if the unit is already active from a previous
 # apply, which would silently skip re-reading an updated
-# /etc/nftables-mnet-ap.conf - explicit restart instead, every time.
-systemctl restart mnet-ap-nat.service
+# /etc/nftables-mnh-ap.conf - explicit restart instead, every time.
+systemctl restart mnh-ap-nat.service
 
-systemctl enable mnet-ap-local-routing.service
-systemctl restart mnet-ap-local-routing.service
+systemctl enable mnh-ap-local-routing.service
+systemctl restart mnh-ap-local-routing.service

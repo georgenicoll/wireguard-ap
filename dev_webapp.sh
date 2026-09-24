@@ -10,8 +10,14 @@ set -euo pipefail
 
 SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
 APP_DIR="${SCRIPT_DIR}/webapp"
-CERT="${APP_DIR}/dev-cert.pem"
-KEY="${APP_DIR}/dev-key.pem"
+# Everything local dev generates (cert, key, session secret) lives here, not
+# in webapp/: main.tf uploads all of webapp/ to the Pi, and none of this
+# should ever go with it.
+DEV_DIR="${SCRIPT_DIR}/.dev"
+mkdir -p "$DEV_DIR"
+chmod 700 "$DEV_DIR"
+CERT="${DEV_DIR}/dev-cert.pem"
+KEY="${DEV_DIR}/dev-key.pem"
 
 command -v uv >/dev/null || { echo "uv not found - see https://docs.astral.sh/uv/getting-started/installation/" >&2; exit 1; }
 
@@ -25,6 +31,9 @@ if [[ ! -f $CERT || ! -f $KEY ]]; then
 fi
 
 export SCRIPTS_DIR="$SCRIPT_DIR/scripts"
+export STATE_DIR="$DEV_DIR"
+# No __pycache__ dirs inside webapp/ either (they'd be uploaded too).
+export PYTHONDONTWRITEBYTECODE=1
 export SSID="${SSID:-dev-ap}"
 export PSK="${PSK:-devpassword}"
 export WEBAPP_HOST="127.0.0.1"
