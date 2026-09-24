@@ -201,7 +201,12 @@ resource "terraform_data" "ap_deploy" {
       # deletes it. The web service's user can traverse this directory (see
       # setup_webapp.sh), so it mustn't be readable by anyone else meanwhile.
       "chmod 600 ${local.remote_dir}/.wg0.conf",
-      "chmod +x ${join(" ", [for f in local.scripts : "${local.remote_dir}/${f}"])}",
+      # Explicit mode, not +x: uploading over an existing file keeps its old
+      # mode, and +x only ever adds bits. Owner-writable but not
+      # group/other-writable, and readable + executable by all - the web
+      # service's own user (mnh-web) has to read a script to run it, but
+      # must never be able to change one.
+      "chmod 755 ${join(" ", [for f in local.scripts : "${local.remote_dir}/${f}"])}",
       # Idempotent: only inserted once, guarded by the marker comment. Runs
       # as pi_user, not root - printed for this account's own logins only,
       # unlike a system-wide /etc/motd.
