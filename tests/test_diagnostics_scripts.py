@@ -5,6 +5,7 @@ Tier: local.
 import re
 import shutil
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -29,12 +30,23 @@ class TestDiagnosticsScript:
             assert desc.strip(), f"no description: {line!r}"
         expected = {"ping", "traceroute", "dig", "ip-addr-list", "ip-route-list",
                     "ip-route-get", "ap-clients", "service-status", "logs",
-                    "uname", "wg-status"}  # wg-status comes from diagnostics_sudo.sh
+                    "uname", "free", "os-release", "wg-status"}  # wg-status comes from diagnostics_sudo.sh
         assert expected <= set(commands), expected - set(commands)
         assert commands["dig"][0] == "name" and commands["dig"][1] == "server?"
         assert commands["dig"][2].startswith("type?=A,")
         assert commands["ping"] == ["host"] and commands["ip-addr-list"] == []
-        assert commands["uname"] == []
+        assert commands["uname"] == [] and commands["free"] == []
+        assert commands["os-release"] == []
+
+    def test_free_shows_memory_and_swap_in_human_readable_units(self):
+        r = script("--run-command", "free")
+        assert r.returncode == 0
+        assert r.stdout.split()[:2] == ["total", "used"] and "Mem:" in r.stdout and "Swap:" in r.stdout
+
+    def test_os_release_prints_the_os_release_file(self):
+        r = script("--run-command", "os-release")
+        assert r.returncode == 0
+        assert r.stdout == Path("/etc/os-release").read_text()
 
     def test_uname_prints_the_full_uname_a_line(self):
         r = script("--run-command", "uname")

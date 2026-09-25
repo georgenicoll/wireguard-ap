@@ -348,7 +348,8 @@ baked into the initial HTML, plus links to two status pages:
   `traceroute`, `dig`, `ip-addr-list`, `ip-route-list`, `ip-route-get`,
   `ap-clients` (runs the existing self-elevating view script),
   `service-status` and `logs` (fixed list of this project's units), and
-  `uname` (`uname -a`).
+  `uname` (`uname -a`), `free` (`free -h`) and `os-release`
+  (`cat /etc/os-release`).
 
   Commands that need root live in `scripts/diagnostics_sudo.sh` (currently
   `wg-status`), which speaks the same `--show-commands`/`--run-command`
