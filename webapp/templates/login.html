@@ -17,9 +17,35 @@
         <label for="password">PassKey:</label>
         <input type="password" id="password" name="password" autofocus
           {% if error %}aria-invalid="true"{% endif %}>
+        <button type="button" class="secondary toggle-visibility" id="toggle-passkey"
+          aria-label="Show PassKey" aria-pressed="false" title="Show/hide PassKey"
+          onclick="togglePasskey()"
+          onkeydown="if (event.key === 'Enter') { event.preventDefault(); document.getElementById('login-form').requestSubmit(); }">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor"
+            stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+            <circle cx="12" cy="12" r="3"/>
+            <line id="passkey-slash" x1="3" y1="3" x2="21" y2="21" visibility="hidden"/>
+          </svg>
+        </button>
         <a role="button" class="secondary" onclick="document.getElementById('login-form').requestSubmit()">Login</a>
       </form>
     </div>
   </main>
+  <script>
+    // Flips the field between masked (type=password) and plain text, and the
+    // icon between "eye" (click to show) and "eye with a slash" (click to hide).
+    function togglePasskey() {
+      const input = document.getElementById('password');
+      const button = document.getElementById('toggle-passkey');
+      const show = input.type === 'password';
+      input.type = show ? 'text' : 'password';
+      document.getElementById('passkey-slash')
+        .setAttribute('visibility', show ? 'visible' : 'hidden');
+      button.setAttribute('aria-pressed', show);
+      button.setAttribute('aria-label', show ? 'Hide PassKey' : 'Show PassKey');
+      input.focus();
+    }
+  </script>
 </body>
 </html>
