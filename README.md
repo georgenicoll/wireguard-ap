@@ -347,7 +347,9 @@ baked into the initial HTML, plus links to two status pages:
   accordingly, and both the app and the script check them. Commands: `ping`,
   `traceroute`, `dig`, `ip-addr-list`, `ip-route-list`, `ip-route-get`,
   `ap-clients` (runs the existing self-elevating view script),
-  `service-status` and `logs` (fixed list of this project's units).
+  `service-status` and `logs` (fixed list of this project's units), and
+  `uname` (`uname -a`), `free` (`free -h`) and `os-release`
+  (`cat /etc/os-release`).
 
   Commands that need root live in `scripts/diagnostics_sudo.sh` (currently
   `wg-status`), which speaks the same `--show-commands`/`--run-command`
@@ -508,9 +510,25 @@ real browser, and you may not want that on every apply.
 ./wga test smoke -k logs  # anything else is passed to pytest
 ```
 
-`tests/integration.py` is a [uv](https://docs.astral.sh/uv/) script (its
-`pytest`, `httpx` and `playwright` dependencies are declared inline, like
-`app.py`'s), so there's nothing to install. The Pi tiers read `pi_host`,
+`tests/integration.py` is the [uv](https://docs.astral.sh/uv/) script that
+runs them (its `pytest`, `httpx` and `playwright` dependencies are declared
+inline, like `app.py`'s), so there's nothing to install. The tests themselves
+are split by area, one file each:
+
+| File | Area |
+|---|---|
+| `test_diagnostics_scripts.py` | the diagnostics scripts' argument handling and the generated sudoers file (`local`) |
+| `test_login.py` | the login form's responses: blank, wrong and right PassKey (`local`) |
+| `test_session_lifetime.py` | session cookie lifetime and expiry (`local`) |
+| `test_diagnostics_ui.py` | the Diagnostics page in a browser (`local` and `ui`) |
+| `test_pi_state.py` | the Pi's services, routing, permissions and leftovers (`smoke`) |
+| `test_pi_web.py` | login/session security and the read-only pages (`smoke`) |
+| `test_pi_diagnostics.py` | every diagnostic through the deployed web app (`smoke`) |
+| `test_reboot.py` | the Restart button, end to end (`reboot`) |
+
+`conftest.py` holds the fixtures (`pi`, `pi_web`, `local_server`, the browser
+ones) and `support.py` the shared code (the Pi config, the web client, the
+health checks). The Pi tiers read `pi_host`,
 `pi_user`, `ssh_private_key_path`, `mode` and `psk` from the tfvars file
 `WGA_CONFIG` points at - the same one `./wga apply` uses. The password is held
 in memory only and never printed or written anywhere.
@@ -526,8 +544,9 @@ The Pi tiers are read-only apart from starting and stopping a `ping`; only
 `reboot` changes anything. A failing run doesn't undo the deploy - the
 output names what's wrong.
 
-To add a check, add a test to `tests/integration.py` and mark it with its
-tier (`@pytest.mark.smoke` and so on). A new diagnostic command needs no
+To add a check, add a test to the file for its area (or a new `test_*.py`
+if it's a new one) and mark it with its tier (`@pytest.mark.smoke` and so
+on). A new diagnostic command needs no
 test changes for the page itself, but should get a case in the `smoke`
 diagnostics tests (and, if it takes free text, in the injection tests).
 
@@ -574,7 +593,7 @@ diagnostics tests (and, if it takes free text, in the injection tests).
 
 ```
 wga                             driver script: ./wga <tofu command> | ./wga test
-tests/integration.py            integration tests (uv script) - see "Integration tests"
+tests/integration.py            runs the integration tests (uv script); tests/test_*.py, conftest.py, support.py - see "Integration tests"
 wireguard-ap.example.tfvars     template for your private config file
 main.tf / variables.tf / outputs.tf / versions.tf
 templates/wireguard-ap.env.tftpl

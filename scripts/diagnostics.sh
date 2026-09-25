@@ -110,6 +110,21 @@ cmd_logs() {
   journalctl -u "$1" -n "$2" --no-pager
 }
 
+register uname "" "Kernel and system information (uname -a)"
+cmd_uname() {
+  uname -a
+}
+
+register free "" "Memory and swap usage (free -h)"
+cmd_free() {
+  free -h
+}
+
+register os-release "" "Operating system name and version (cat /etc/os-release)"
+cmd_os_release() {
+  cat /etc/os-release
+}
+
 # ---- dispatch ---------------------------------------------------------
 
 case "${1:-}" in

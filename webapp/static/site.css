@@ -281,6 +281,25 @@ select {
   white-space: pre-wrap;
 }
 
+/* The output dialog (Diagnostics and Manage) - Pico caps every modal at
+   510-700px wide, far too narrow for command output, so this one takes up to
+   90% of the window (never the whole of it) and 1400px. It's a flex column
+   capped at 90% of the window's height: the output pane takes whatever the
+   header and footer leave and scrolls inside that, instead of the fixed
+   20rem cap .output has elsewhere. Short output still gives a short dialog.
+   Only #output-dialog - the Restart/Shutdown confirmations stay small. */
+#output-dialog > article {
+  display: flex;
+  flex-direction: column;
+  width: 90vw;
+  max-width: 1400px;
+  max-height: 90vh;
+}
+#output-dialog .output {
+  flex: 1 1 auto;
+  max-height: none;
+}
+
 /* Right-aligns a trailing action button within its card/form, without
    pulling the labels/fields above it (a plain <form> or <article>) over
    too - scoped to just this wrapper rather than the whole block. */

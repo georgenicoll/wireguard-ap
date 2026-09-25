@@ -636,7 +636,16 @@ def login_form(request: Request):
 
 
 @app.post("/login", response_class=HTMLResponse)
-def login(request: Request, password: str = Form(...)):
+def login(request: Request, password: str = Form("")):
+    # Form("") rather than Form(...): FastAPI treats a blank required field
+    # as missing and answers with a bare 422 JSON error, not the login page.
+    if not password:
+        return templates.TemplateResponse(
+            request,
+            "login.html",
+            {"error": "Enter PassKey"},
+            status_code=400,
+        )
     if secrets.compare_digest(password, PSK):
         request.session["authenticated"] = True
         request.session["login_at"] = int(time.time())
