@@ -53,12 +53,15 @@ login banner - see below) is fetched automatically the first time you run
   self-elevates with `sudo` internally (`setup_host.sh`,
   `setup_wireguard.sh`, `setup_forwarding_and_nat.sh`, `setup_ap.sh`,
   `uplink_wifi.sh`, `setup_webapp.sh`, `view_currently_associated_clients.sh`,
-  `view_wireguard_status.sh`, `diagnostics_sudo.sh`, `shutdown_pi.sh`), not root access in general:
+  `view_wireguard_status.sh`, `diagnostics_sudo.sh`, `shutdown_pi.sh`,
+  `setup_metrics.sh`), not root access in general. (Already set this up before
+  the metrics collector was added? Run the block again: it replaces the file,
+  and `./wga apply` needs `setup_metrics.sh` in it.)
   ```bash
   PI_USER=changeme   # <-- OVERWRITE with your real pi_user before running this
 
   cat <<EOF | sudo tee "/etc/sudoers.d/010-${PI_USER}-wireguard-ap"
-  ${PI_USER} ALL=(root) NOPASSWD: /home/${PI_USER}/setup_host.sh, /home/${PI_USER}/setup_wireguard.sh, /home/${PI_USER}/setup_forwarding_and_nat.sh, NOPASSWD:SETENV: /home/${PI_USER}/setup_ap.sh, NOPASSWD: /home/${PI_USER}/uplink_wifi.sh, NOPASSWD: /home/${PI_USER}/setup_webapp.sh, NOPASSWD: /home/${PI_USER}/view_currently_associated_clients.sh, NOPASSWD: /home/${PI_USER}/view_wireguard_status.sh, NOPASSWD: /home/${PI_USER}/diagnostics_sudo.sh, NOPASSWD: /home/${PI_USER}/shutdown_pi.sh
+  ${PI_USER} ALL=(root) NOPASSWD: /home/${PI_USER}/setup_host.sh, /home/${PI_USER}/setup_wireguard.sh, /home/${PI_USER}/setup_forwarding_and_nat.sh, NOPASSWD:SETENV: /home/${PI_USER}/setup_ap.sh, NOPASSWD: /home/${PI_USER}/uplink_wifi.sh, NOPASSWD: /home/${PI_USER}/setup_webapp.sh, NOPASSWD: /home/${PI_USER}/view_currently_associated_clients.sh, NOPASSWD: /home/${PI_USER}/view_wireguard_status.sh, NOPASSWD: /home/${PI_USER}/diagnostics_sudo.sh, NOPASSWD: /home/${PI_USER}/shutdown_pi.sh, NOPASSWD: /home/${PI_USER}/setup_metrics.sh
   EOF
   sudo chmod 0440 "/etc/sudoers.d/010-${PI_USER}-wireguard-ap"
   sudo visudo -c   # validates syntax - a bad sudoers file can lock out sudo entirely
@@ -158,6 +161,8 @@ changing behaviour) and re-apply — see
 | `scripts/*.sh` | The Pi-side scripts, uploaded byte-for-byte (not passed through `templatefile()`, since they use bash `${VAR}` inside heredocs that would collide with OpenTofu's own templating). `setup_host.sh` (packages, stock services, Wi-Fi country, radio unblock - the one-time-ish setup that used to be inline `sudo` commands in `main.tf`), `setup_wireguard.sh`, `setup_ap.sh`, `setup_forwarding_and_nat.sh`, `uplink_wifi.sh`, `setup_webapp.sh`, `view_currently_associated_clients.sh` and `view_wireguard_status.sh` all self-elevate with `sudo` internally (`[[ $EUID -eq 0 ]] \|\| exec sudo "$SCRIPT" "$@"`) rather than being invoked with `sudo` at the call site, so sudoers can be scoped to exactly these script paths - see step 2 above. The latter two are also run non-interactively by the web UI (see below), which is the other reason they self-elevate the whole script rather than sudo-prefixing individual commands: no TTY means no password prompt, so every sudo call needs its own NOPASSWD coverage otherwise. |
 | `webapp/` | A small FastAPI + [htmx](https://htmx.org) web UI (`app.py`, `templates/`, `static/`), uploaded as-is and run by `setup_webapp.sh` via [uv](https://docs.astral.sh/uv/) - see "Web UI" below. |
 | `variables.tf` / `outputs.tf` / `versions.tf` | The input/output contract and provider requirement (`hashicorp/null` only — no cloud provider). |
+| `simple-metrics.pin` + `tools/fetch_simple_metrics.sh` | Which release of the [simple-metrics](https://github.com/georgenicoll/simple-metrics) collector to deploy, and the checksum of its archive. `wga` runs the fetch script, which downloads that release on your machine, checks it against the pinned checksum, and hands the path to `tofu` - see "Metrics collector". |
+| `scripts/setup_metrics.sh` | Installs the collector's binary, creates its user, and writes and starts its systemd unit. Run by `main.tf`'s separate `metrics_deploy` resource. |
 | `wga` | Thin wrapper around `tofu`, same idea as wireguard-router's `wgr` - also fetches the WireGuard client config named by `wireguard_client_name` via wireguard-router's own `scripts/wg-peer.sh`. |
 
 Config is kept deliberately minimal: most of the Pi-side network settings
@@ -318,6 +323,54 @@ provisioner to be added if you want `destroy` to do that automatically.
 See `/mnt/c/Users/george/Dropbox/Network/wireguard/pi-ap-handoff.md` for the
 full hardware/design rationale and troubleshooting reference these scripts
 were built from.
+
+## Metrics collector
+
+The Pi keeps a rolling history of its own CPU, load, memory, swap, temperature
+and network traffic (`eth0`, both radios, `br-ap` and `wg0`), sampled every 5
+seconds for 7 days, in memory only - nothing is written to disk. That is done
+by [simple-metrics](https://github.com/georgenicoll/simple-metrics), a small
+separate Rust daemon (about 15 MB of RAM when its history is full), which
+serves it on a Unix socket for the web app to read.
+
+**How it gets there.** `simple-metrics.pin` names a release and the SHA-256 of
+its `aarch64` archive. `./wga` runs `tools/fetch_simple_metrics.sh`, which
+downloads that release *on your machine* (so the Pi needs no access to GitHub),
+refuses it unless it matches the pinned checksum, and passes the path to `tofu`,
+which uploads it. The checksum comes from the pin file only, never from the
+download, so a release altered after the fact is caught. Downloads are cached
+in `~/.cache/wireguard-ap/simple-metrics`, and re-checked on every run.
+
+**Upgrading.** Put the new version and the checksum of its
+`simple-metrics-<version>-aarch64-unknown-linux-musl.tar.gz` (from the
+`SHA256SUMS` on the release's GitHub page) into `simple-metrics.pin`, then
+`./wga apply`. **Trying a local build instead:** `SIMPLE_METRICS_BIN=/path/to/simple-metrics ./wga apply`
+uses that binary without any check (and says so).
+
+**What runs on the Pi.** `setup_metrics.sh` installs the binary to
+`/usr/local/bin/simple-metrics` (root-owned, so nothing that runs as a service
+user can change it) and starts `mnh-ap-metrics.service` as its own unprivileged
+user, `mnh-metrics`. It needs no privileges at all - everything it reads is
+world-readable under `/proc` and `/sys` - so the unit drops every capability
+and locks the rest of the system down (`systemd-analyze security` rates it
+1.4, "OK"). Its socket, `/run/simple-metrics/simple-metrics.sock`, is created
+in a directory only `mnh-metrics` and the web app's group (`mnh-web`) can
+enter, so no other account on the Pi can connect.
+
+**Separate from the access point's setup.** The collector has its own
+`terraform_data` resource, `metrics_deploy`, and `setup_metrics.sh` is
+deliberately not in `local.scripts`. So a new release only re-runs
+`setup_metrics.sh` - never `setup_ap.sh`, which takes the access point down and
+back up. (A test checks this stays true.) It does run after `ap_deploy` on a
+first deploy, because it needs the web app's group.
+
+**What happens to the history.** It survives the web app being redeployed or
+restarted, which is the point of a separate service. It is lost when the
+collector itself restarts (an upgrade, a crash) and on a reboot.
+
+**Not built yet:** the web app doesn't use it. The Metrics page needs the
+collector to answer time-range, per-metric and downsampled queries first - see
+its `TODO.md`.
 
 ## Web UI
 
@@ -521,7 +574,9 @@ are split by area, one file each:
 | `test_login.py` | the login form's responses: blank, wrong and right PassKey (`local`) |
 | `test_session_lifetime.py` | session cookie lifetime and expiry (`local`) |
 | `test_diagnostics_ui.py` | the Diagnostics page in a browser (`local` and `ui`) |
+| `test_metrics_deploy.py` | how the collector gets deployed: the fetch script (download, verify, cache), the pin, the systemd unit, and that a collector upgrade can't re-run the access point's setup (`local`) |
 | `test_pi_state.py` | the Pi's services, routing, permissions and leftovers (`smoke`) |
+| `test_pi_metrics.py` | the deployed collector: runs unprivileged, its socket is closed to other accounts, it is the pinned release (`smoke`) |
 | `test_pi_web.py` | login/session security and the read-only pages (`smoke`) |
 | `test_pi_diagnostics.py` | every diagnostic through the deployed web app (`smoke`) |
 | `test_reboot.py` | the Restart button, end to end (`reboot`) |
@@ -611,7 +666,10 @@ scripts/diagnostics.sh          Diagnostics page commands (--show-commands / --r
 scripts/diagnostics_sudo.sh     the root-only ones, same protocol; diagnostics.sh delegates to it
 scripts/diagnostics_lib.sh      registry/argument checking both source
 scripts/setup_webapp.sh
+scripts/setup_metrics.sh        installs and runs the simple-metrics collector (see "Metrics collector")
 scripts/shutdown_pi.sh
+simple-metrics.pin              the collector release to deploy + its checksum
+tools/fetch_simple_metrics.sh   downloads and verifies that release (run by wga)
 webapp/app.py
 webapp/templates/_header.html   shared by every page
 webapp/templates/index.html

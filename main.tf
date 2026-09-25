@@ -15,6 +15,13 @@ locals {
     "shutdown_pi.sh",
   ]
 
+  # The metrics collector's own deploy (see terraform_data.metrics_deploy).
+  # Deliberately not part of `scripts` above: that list's hash triggers
+  # ap_deploy, which re-runs setup_ap.sh, and updating the collector must
+  # never take the access point down. The empty default of
+  # simple_metrics_binary (tofu run without wga) skips it.
+  metrics_enabled = var.simple_metrics_binary != ""
+
   # Every file under webapp/ (app.py, templates/, static/), so a change to
   # any of them - not just app.py - triggers a redeploy.
   webapp_files = sort(fileset("${path.module}/webapp", "**"))
@@ -241,4 +248,58 @@ resource "terraform_data" "ap_deploy" {
   # uplink_wifi.sh is uploaded but not run here: which network to join isn't
   # known until you're actually on the road. SSH in and run it manually, e.g.
   # ssh <pi_user>@<pi_host> '~/uplink_wifi.sh "some-hotel-wifi" "password"'
+}
+
+# The metrics collector (github.com/georgenicoll/simple-metrics): a separate
+# small daemon, installed and run by setup_metrics.sh. Its own resource, so it
+# is redeployed - on a new release or a change to its setup script - without
+# re-running any of ap_deploy, in particular setup_ap.sh, which takes the
+# access point down and back up.
+#
+# Runs after ap_deploy (its first run needs the web app's user and group,
+# which setup_webapp.sh creates), but a change to ap_deploy doesn't redeploy
+# this: `depends_on` orders them, only `triggers_replace` decides re-runs.
+resource "terraform_data" "metrics_deploy" {
+  count      = local.metrics_enabled ? 1 : 0
+  depends_on = [terraform_data.ap_deploy]
+
+  triggers_replace = {
+    binary = filesha256(var.simple_metrics_binary)
+    script = filesha256("${path.module}/scripts/setup_metrics.sh")
+    # setup_metrics.sh reads the interface names from this.
+    env_file = sha256(local.env_file)
+  }
+
+  connection {
+    type        = "ssh"
+    host        = var.pi_host
+    user        = var.pi_user
+    private_key = var.ssh_private_key_path != "" ? file(var.ssh_private_key_path) : null
+    agent       = var.ssh_private_key_path == ""
+    timeout     = "20s"
+  }
+
+  # Staged in the deploy user's home like the scripts; setup_metrics.sh
+  # installs it to /usr/local/bin, root-owned, where the collector's own
+  # user can run but never change it.
+  provisioner "file" {
+    source      = var.simple_metrics_binary
+    destination = "${local.remote_dir}/simple-metrics"
+  }
+
+  provisioner "file" {
+    source      = "${path.module}/scripts/setup_metrics.sh"
+    destination = "${local.remote_dir}/setup_metrics.sh"
+  }
+
+  provisioner "remote-exec" {
+    inline = [
+      # Explicit modes for the same reason as in ap_deploy: uploading over an
+      # existing file keeps its old mode.
+      "chmod 755 ${local.remote_dir}/setup_metrics.sh ${local.remote_dir}/simple-metrics",
+      # Self-elevates with sudo, so needs setup_metrics.sh in the deploy
+      # user's sudoers entry - see README's sudoers section.
+      "${local.remote_dir}/setup_metrics.sh",
+    ]
+  }
 }

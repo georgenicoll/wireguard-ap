@@ -1,0 +1,13 @@
+# Which release of simple-metrics (github.com/georgenicoll/simple-metrics) is
+# deployed to the Pi, and the SHA-256 of its aarch64 archive.
+#
+# ./wga downloads that release (tools/fetch_simple_metrics.sh) and refuses it
+# unless the archive matches the checksum below. This file is the only thing
+# trusted: the checksum is never taken from the download itself, so a release
+# that was altered after the fact is caught.
+#
+# To upgrade: pick the release, then copy the checksum for
+# simple-metrics-<version>-aarch64-unknown-linux-musl.tar.gz from the
+# SHA256SUMS file on that release's GitHub page, and change both lines.
+SIMPLE_METRICS_VERSION=v0.1.0
+SIMPLE_METRICS_SHA256=ec6fae9cde0597c4d59e852bd94a60b3d47e7f2874c60cec638f465f68762e18

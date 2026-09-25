@@ -29,6 +29,10 @@
 #   WGR_CONFIG /   wireguard-router's own env vars, needed for the above -
 #   WGR_KEYS       see wireguard-router's README. Typically already set by
 #                  sourcing whatever environment script you use for that repo.
+#   SIMPLE_METRICS_BIN  optional: deploy this locally built simple-metrics
+#                  binary instead of the release pinned in simple-metrics.pin
+#                  (which wga otherwise downloads and verifies). For trying
+#                  a change before it is released - it skips the checksum.
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -132,6 +136,16 @@ MSG
         fi
         TF_VAR_wireguard_client_config="$("$WG_PEER_SCRIPT" client "$CLIENT_NAME")"
         export TF_VAR_wireguard_client_config
+    fi
+
+    # The simple-metrics collector binary: the release pinned in
+    # simple-metrics.pin, downloaded and checked against the pinned checksum
+    # (or SIMPLE_METRICS_BIN, to try a local build). Fetched here, on this
+    # machine, so the Pi never needs to reach GitHub. A failed check stops
+    # everything: nothing unverified is ever uploaded.
+    if [[ -f "$REPO_DIR/simple-metrics.pin" || -n "${SIMPLE_METRICS_BIN:-}" ]]; then
+        TF_VAR_simple_metrics_binary="$("$REPO_DIR/tools/fetch_simple_metrics.sh")"
+        export TF_VAR_simple_metrics_binary
     fi
     ;;
 esac
