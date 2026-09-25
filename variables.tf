@@ -112,3 +112,11 @@ variable "wireguard_client_config" {
   sensitive   = true
   default     = ""
 }
+
+# --- Metrics collector -------------------------------------------------------
+
+variable "simple_metrics_binary" {
+  description = "Path to the simple-metrics binary (aarch64, static) to install on the Pi as the metrics collector. Populated automatically by wga, which downloads the release pinned in simple-metrics.pin and verifies its checksum - not meant to be set by hand in tfvars. Empty skips the collector entirely (e.g. when using tofu directly without wga)."
+  type        = string
+  default     = ""
+}

@@ -22,6 +22,8 @@ DEPLOYED_SCRIPTS = [
     "setup_ap.sh", "uplink_wifi.sh", "view_currently_associated_clients.sh",
     "view_wireguard_status.sh", "diagnostics.sh", "diagnostics_sudo.sh",
     "diagnostics_lib.sh", "setup_webapp.sh", "shutdown_pi.sh",
+    # Uploaded by main.tf's metrics_deploy rather than listed in local.scripts.
+    "setup_metrics.sh",
 ]
 
 
@@ -131,7 +133,8 @@ def free_port() -> int:
 def expected_units(pi: PiConfig) -> list[str]:
     hostapd = ["mnh-hostapd@wlan0", "mnh-hostapd@wlan1"] if pi.mode == "dual" \
         else ["mnh-hostapd@wlan1"]
-    return ["mnh-ap-webapp", "mnh-ap-nat", "mnh-ap-local-routing", "mnh-ap-wg-watchdog.timer",
+    return ["mnh-ap-webapp", "mnh-ap-metrics", "mnh-ap-nat", "mnh-ap-local-routing",
+            "mnh-ap-wg-watchdog.timer",
             "wg-quick@wg0", "dnsmasq", "NetworkManager", *hostapd]
 
 
