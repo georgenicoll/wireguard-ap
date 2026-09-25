@@ -48,7 +48,7 @@ BR = os.environ.get("BR", "br-ap")
 SSID = os.environ.get("SSID", "")
 
 logging.basicConfig(
-    level=logging.INFO,
+    level=os.environ.get("LOG_LEVEL", "INFO").upper(),
     format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
 )
 LOGGER = logging.getLogger(__name__)
@@ -58,10 +58,15 @@ def _run(cmd: list[str], timeout: float = 3) -> str:
     # Command may not even exist here (e.g. nmcli/iw, both Pi-only - see
     # dev_webapp.sh) - caught the same as a failed/timed-out run, since
     # either way there's just no data to show.
+    start = time.monotonic()
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
-    except (OSError, subprocess.TimeoutExpired):
+    except (OSError, subprocess.TimeoutExpired) as e:
+        LOGGER.debug("%.2fs %s - failed: %r", time.monotonic() - start, cmd, e)
         return ""
+    LOGGER.debug(
+        "%.2fs %s - exit %d", time.monotonic() - start, cmd, result.returncode
+    )
     return result.stdout if result.returncode == 0 else ""
 
 
@@ -73,15 +78,23 @@ def _run_script(name: str, timeout: float = 10) -> str:
     # (the AP/WireGuard Details pages show this text directly) rather
     # than a hard 500.
     script = SCRIPTS_DIR / name
+    start = time.monotonic()
     LOGGER.info("Attempting to run script: %s", str(script))
     try:
         result = subprocess.run(
             [str(script)], capture_output=True, text=True, timeout=timeout
         )
     except (OSError, subprocess.TimeoutExpired) as e:
-        LOGGER.info("Failed to run: %s - %s", str(script), str(e))
+        LOGGER.info(
+            "Failed to run: %s after %.2fs - %s",
+            str(script), time.monotonic() - start, str(e),
+        )
         return f"Failed to run {name}: {e}"
-    LOGGER.info("Finished running: %s", str(script))
+    LOGGER.info(
+        "Finished running: %s in %.2fs - exit %d%s",
+        str(script), time.monotonic() - start, result.returncode,
+        f", stderr: {result.stderr.strip()}" if result.returncode else "",
+    )
     output = result.stdout
     if result.returncode != 0:
         output += f"\n(exit code {result.returncode})\n{result.stderr}"
@@ -346,6 +359,22 @@ templates = Jinja2Templates(directory=BASE_DIR / "templates")
 
 
 @app.middleware("http")
+async def log_request_timing(request: Request, call_next):
+    # Outermost timing per request (registered before no_cache_static, so
+    # it runs inside it - close enough): shows whether a slow login is the
+    # POST /login, the redirect to / (which shells out - see the per-command
+    # timings from _run/_run_script) or just the browser.
+    start = time.monotonic()
+    response = await call_next(request)
+    LOGGER.debug(
+        "%s %s -> %d in %.2fs",
+        request.method, request.url.path, response.status_code,
+        time.monotonic() - start,
+    )
+    return response
+
+
+@app.middleware("http")
 async def no_cache_static(request: Request, call_next):
     # Without this, browsers can serve a stale /static/* file (site.css in
     # particular) on a plain reload - only a hard refresh forces a
@@ -380,12 +409,13 @@ def require_login(request: Request) -> None:
 
 @app.get("/", response_class=HTMLResponse, dependencies=[Depends(require_login)])
 def index(request: Request):
-    context = {
-        "show_logout": True,
-        "host": host_info(),
-        "ap": ap_info(),
-        "wireguard": wireguard_info(),
-    }
+    context = {"show_logout": True}
+    for key, gather in (
+        ("host", host_info), ("ap", ap_info), ("wireguard", wireguard_info)
+    ):
+        start = time.monotonic()
+        context[key] = gather()
+        LOGGER.debug("index: %s took %.2fs", key, time.monotonic() - start)
     return templates.TemplateResponse(request, "index.html", context)
 
 
