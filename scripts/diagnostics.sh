@@ -110,6 +110,11 @@ cmd_logs() {
   journalctl -u "$1" -n "$2" --no-pager
 }
 
+register uname "" "Kernel and system information (uname -a)"
+cmd_uname() {
+  uname -a
+}
+
 # ---- dispatch ---------------------------------------------------------
 
 case "${1:-}" in
