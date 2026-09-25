@@ -67,7 +67,7 @@ body > main {
    own display. */
 .login-grid {
   display: grid;
-  grid-template-columns: auto 1fr auto;
+  grid-template-columns: auto 1fr auto auto;
   align-items: center;
   column-gap: 0.5rem;
   row-gap: 0.15rem;
@@ -88,8 +88,66 @@ body > main {
   grid-column: 2;
   grid-row: 2;
 }
-.login-grid [role=button] {
+.login-grid .toggle-visibility {
   grid-column: 3;
+  grid-row: 2;
+  /* Small icon-only button: narrower than the text buttons' 0.6rem side
+     padding, and the svg as a block so it adds no line-height of its own. */
+  --pico-form-element-spacing-horizontal: 0.4rem;
+  width: auto;
+  /* Stretches to the text box's height, and the negative left margin
+     cancels the grid's column-gap so the two touch - the extra 1px pulls
+     it over the input's right border so the pair share one line there
+     instead of two side by side (which read as a 2px border). The joined
+     corners are squared off (here and on the input below) so they read as
+     one control. */
+  align-self: stretch;
+  margin: 0 0 0 calc(-0.5rem - 1px);
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+}
+.login-grid input {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+/* The button's border follows the text box's, in each of its states - a
+   light border normally, Pico's blue border plus a 1px focus ring while the
+   box has focus - rather than .secondary's darker one. The invalid-state
+   rules below come after these, so they win when both apply. !important
+   because .secondary's own border-color is. */
+.login-grid input + .toggle-visibility {
+  border-color: var(--pico-form-element-border-color) !important;
+}
+.login-grid input:focus + .toggle-visibility {
+  border-color: var(--pico-form-element-active-border-color) !important;
+  box-shadow: 0 0 0 0.0625rem var(--pico-form-element-active-border-color);
+}
+/* Wrong password: Pico turns the input's border red via aria-invalid; carry
+   that onto the button attached to it so the pair still reads as one
+   control. !important because .secondary's own border-color is. The
+   :focus variant tracks the input's (brighter) focused-and-invalid border. */
+.login-grid input[aria-invalid=true] + .toggle-visibility {
+  border-color: var(--pico-form-element-invalid-border-color) !important;
+}
+.login-grid input[aria-invalid=true]:focus + .toggle-visibility {
+  border-color: var(--pico-form-element-invalid-active-border-color) !important;
+  /* Pico also draws a focus ring around the focused input, on top of its 1px
+     border (2px in all). The same ring here keeps the button's border as
+     heavy as the box's. The width is set explicitly: Pico's own
+     --pico-outline-width is 0.0625rem for inputs but 0.125rem for buttons,
+     so using the variable would make the button's ring twice as wide. */
+  box-shadow: 0 0 0 0.0625rem var(--pico-form-element-invalid-focus-color);
+}
+/* The input's focus ring would otherwise be drawn under the button next to it. */
+.login-grid input:focus {
+  position: relative;
+  z-index: 1;
+}
+.login-grid .toggle-visibility svg {
+  display: block;
+}
+.login-grid [role=button] {
+  grid-column: 4;
   grid-row: 2;
 }
 form.login-form {
