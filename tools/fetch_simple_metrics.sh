@@ -4,6 +4,10 @@
 # hands the path to tofu (as TF_VAR_simple_metrics_binary); progress and
 # errors go to stderr, so stdout is just the path.
 #
+# With --cli it prints the path of the release's smq command-line client
+# instead (from the same verified archive), or nothing if that release has no
+# smq (versions before 0.3.0), so an older pin still deploys the collector.
+#
 # The release and its SHA-256 are pinned in simple-metrics.pin. The archive
 # is checked against that pinned checksum, never against one published next
 # to it, so a release altered after the fact is refused. It is downloaded
@@ -11,13 +15,21 @@
 #
 # Settings (all optional):
 #   SIMPLE_METRICS_BIN          use this binary instead of the pinned release,
-#                               for trying a local build. Not verified.
+#                               for trying a local build. Not verified. Its
+#                               smq is the one beside it, if there is one.
 #   SIMPLE_METRICS_PIN_FILE     the pin file (default: simple-metrics.pin)
 #   SIMPLE_METRICS_CACHE_DIR    where downloads are kept (default:
 #                               ~/.cache/wireguard-ap/simple-metrics)
 #   SIMPLE_METRICS_RELEASE_URL  where releases are downloaded from (default:
 #                               the project's GitHub releases; for testing)
 set -euo pipefail
+
+WANT=binary
+case "${1:-}" in
+  "") ;;
+  --cli) WANT=cli ;;
+  *) echo "usage: fetch_simple_metrics.sh [--cli]" >&2; exit 2 ;;
+esac
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PIN_FILE="${SIMPLE_METRICS_PIN_FILE:-$REPO_DIR/simple-metrics.pin}"
@@ -35,7 +47,12 @@ if [[ -n ${SIMPLE_METRICS_BIN:-} ]]; then
   [[ -f $SIMPLE_METRICS_BIN && -x $SIMPLE_METRICS_BIN ]] \
     || fail "SIMPLE_METRICS_BIN=$SIMPLE_METRICS_BIN is not an executable file"
   note "WARNING: using $SIMPLE_METRICS_BIN, not the pinned release"
-  echo "$(cd "$(dirname "$SIMPLE_METRICS_BIN")" && pwd)/$(basename "$SIMPLE_METRICS_BIN")"
+  LOCAL_DIR="$(cd "$(dirname "$SIMPLE_METRICS_BIN")" && pwd)"
+  if [[ $WANT == cli ]]; then
+    [[ -x $LOCAL_DIR/smq ]] && echo "$LOCAL_DIR/smq"
+  else
+    echo "$LOCAL_DIR/$(basename "$SIMPLE_METRICS_BIN")"
+  fi
   exit 0
 fi
 
@@ -73,7 +90,22 @@ if ! matches_pin "$ARCHIVE"; then
 fi
 
 BINARY="$DIR/simple-metrics"
-tar -xzf "$ARCHIVE" -C "$DIR" --strip-components=1 "simple-metrics-${VERSION}-${TARGET}/simple-metrics" \
+PREFIX="simple-metrics-${VERSION}-${TARGET}"
+tar -xzf "$ARCHIVE" -C "$DIR" --strip-components=1 "$PREFIX/simple-metrics" \
   || fail "could not extract simple-metrics from $ARCHIVE"
 chmod 755 "$BINARY"
-echo "$BINARY"
+# smq came in 0.3.0. Remove a stale one first so a release without it can't
+# leave an older release's client in the cache to be deployed.
+CLI="$DIR/smq"
+rm -f "$CLI"
+if tar -tzf "$ARCHIVE" "$PREFIX/smq" &>/dev/null; then
+  tar -xzf "$ARCHIVE" -C "$DIR" --strip-components=1 "$PREFIX/smq" \
+    || fail "could not extract smq from $ARCHIVE"
+  chmod 755 "$CLI"
+fi
+if [[ $WANT == cli ]]; then
+  [[ -f $CLI ]] && echo "$CLI"
+else
+  echo "$BINARY"
+fi
+exit 0

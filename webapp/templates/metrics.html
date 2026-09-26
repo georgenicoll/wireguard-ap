@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>mnh-ap - Metrics</title>
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+  <link rel="stylesheet" href="/static/pico.min.css">
+  <link rel="stylesheet" href="/static/uPlot.min.css">
+  <link rel="stylesheet" href="/static/site.css">
+  <script src="/static/htmx.min.js"></script>
+  <script src="/static/uPlot.iife.min.js"></script>
+  <script src="/static/metrics.js" defer></script>
+</head>
+<body>
+  {% include "_header.html" %}
+  {% include "_nav.html" %}
+  <main>
+    {% if error %}
+    <article>
+      <header>No metrics available</header>
+      <p>{{ error|capitalize }}. It keeps the Pi's history of CPU, memory, temperature
+        and network use; check that the <code>mnh-ap-metrics</code> service is running.</p>
+    </article>
+    {% else %}
+    <div class="metric-controls">
+      <div class="field-row">
+        <label for="metric-select">Metric</label>
+        <select id="metric-select" class="fit-content">
+          {% for heading, metrics in groups %}
+          <optgroup label="{{ heading }}">
+            {% for m in metrics %}
+            <option value="{{ m.name }}">{{ m.label }}{% if m.unit %} ({{ m.unit }}){% endif %}</option>
+            {% endfor %}
+          </optgroup>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="field-row">
+        <label for="range-select">Last</label>
+        <select id="range-select" class="fit-content">
+          {% for r in ranges %}<option value="{{ r }}"{% if r == "1h" %} selected{% endif %}>{{ r }}</option>{% endfor %}
+        </select>
+      </div>
+    </div>
+
+    <div id="chart" class="chart" role="img" aria-label="Chart of the selected metric over time"></div>
+    <p id="chart-status" class="chart-status" aria-live="polite">Loading...</p>
+    {% endif %}
+  </main>
+</body>
+</html>

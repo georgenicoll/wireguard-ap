@@ -368,9 +368,30 @@ first deploy, because it needs the web app's group.
 restarted, which is the point of a separate service. It is lost when the
 collector itself restarts (an upgrade, a crash) and on a reboot.
 
-**Not built yet:** the web app doesn't use it. The Metrics page needs the
-collector to answer time-range, per-metric and downsampled queries first - see
-its `TODO.md`.
+**The `smq` client.** Each release also carries `smq`, a command-line client
+for the collector's socket (`smq info`, `smq latest`,
+`smq read --metric cpu_percent --from 1h --points 60`; `smq --help` for the
+rest). `./wga apply` puts the pinned release's copy in the deploy user's home
+directory as `~/smq`, through its own `metrics_cli` resource, so a new release
+replaces just that. (Releases before 0.3.0 don't have one, and are deployed
+without it.) It defaults to `/run/simple-metrics/simple-metrics.sock`, and the
+deploy user is deliberately *not* allowed to use that socket, so run it with
+the web app's group:
+
+```bash
+sudo -g mnh-web ~/smq latest
+```
+
+That asks for your password, and needs sudo to allow running as that group.
+Don't add a passwordless (`NOPASSWD`) rule for it: `~/smq` is in your own home,
+so anything able to run as you could swap it for something else and get the
+web app's group for free.
+
+**Running the collector locally.** In the simple-metrics repo, `./run_local.sh`
+builds it and runs it in the foreground on `/tmp/simple-metrics.sock`, and
+`smq --local latest` queries it. `./dev_webapp.sh` points the web UI at that
+socket (`METRICS_SOCKET`, to use another), so the Metrics page shows this
+machine's own figures while you work on it.
 
 ## Web UI
 
@@ -413,6 +434,18 @@ baked into the initial HTML, plus links to two status pages:
   below) already allows `diagnostics_sudo.sh --run-command <anything>`.
   `diagnostics_lib.sh` is the registry/argument-checking code both scripts
   source.
+- **`/metrics`** — a chart of one metric at a time (CPU, load, memory, swap,
+  temperature, and each interface's receive/transmit rate) over the last 1h,
+  6h, 24h or 7d, refreshed every 5 seconds while the tab is visible. It reads
+  the collector's socket (see "Metrics collector"; `METRICS_SOCKET` overrides
+  the path) through `/metrics/data?metric=<name>&range=<1h|6h|24h|7d>`, which
+  validates both, asks the collector for at most 600 points (each the mean of
+  its time bucket, with the min and max, drawn as a line and a shaded band, so
+  a short spike still shows on a week-long chart) and returns them as JSON.
+  A gap - the collector was down, or a value couldn't be measured - is a
+  break in the line. If the collector can't be reached the page says so
+  rather than failing. It needs collector v0.2.0 or later (time ranges,
+  subsets, downsampling).
 - **`/manage`** — runs `setup_ap.sh`/`uplink_wifi.sh` with parameters chosen
   in the browser (mode, band, upstream SSID/password) and streams their
   output live rather than just showing a final result, using htmx's
@@ -524,6 +557,9 @@ https://<pi_host>/       # or https://<ap_ip>/ once joined to the AP - also link
   initially) specifically because the SSE extension needs htmx's classic
   `defineExtension` API, which v4 replaced with `registerExtension` -
   confirmed by grepping the vendored file rather than assuming.
+- **uPlot is vendored** too (`webapp/static/uPlot.iife.min.js`,
+  `uPlot.min.css`, 1.6.32, MIT - its licence is `uPlot.LICENSE` beside them),
+  for the same no-internet reason. The chart code is `static/metrics.js`.
 - `uv`'s own package cache means only the *first* run on a given Pi needs
   internet access to resolve `app.py`'s dependencies - later re-runs (e.g.
   after a reboot, or a redeploy that doesn't touch the dependency block)
@@ -575,8 +611,10 @@ are split by area, one file each:
 | `test_session_lifetime.py` | session cookie lifetime and expiry (`local`) |
 | `test_diagnostics_ui.py` | the Diagnostics page in a browser (`local` and `ui`) |
 | `test_metrics_deploy.py` | how the collector gets deployed: the fetch script (download, verify, cache), the pin, the systemd unit, and that a collector upgrade can't re-run the access point's setup (`local`) |
+| `test_metrics_page.py` | the Metrics page's backend against a fake collector: validation, the collector being down or misbehaving, the JSON shape (`local`) |
+| `test_metrics_ui.py` | the Metrics page in a browser: the chart, the pickers, refresh, remembered choice, the collector failing, and Log out working from every page (`local` and `ui`) |
 | `test_pi_state.py` | the Pi's services, routing, permissions and leftovers (`smoke`) |
-| `test_pi_metrics.py` | the deployed collector: runs unprivileged, its socket is closed to other accounts, it is the pinned release (`smoke`) |
+| `test_pi_metrics.py` | the deployed collector: runs unprivileged, its socket is closed to other accounts, it is the pinned release, `~/smq` is deployed; and the Metrics page and its data through the web app (`smoke`) |
 | `test_pi_web.py` | login/session security and the read-only pages (`smoke`) |
 | `test_pi_diagnostics.py` | every diagnostic through the deployed web app (`smoke`) |
 | `test_reboot.py` | the Restart button, end to end (`reboot`) |
@@ -647,6 +685,7 @@ diagnostics tests (and, if it takes free text, in the injection tests).
 ## Layout
 
 ```
+dev_webapp.sh                   runs the web UI locally with hot reload - see "Local development"
 wga                             driver script: ./wga <tofu command> | ./wga test
 tests/integration.py            runs the integration tests (uv script); tests/test_*.py, conftest.py, support.py - see "Integration tests"
 wireguard-ap.example.tfvars     template for your private config file
@@ -676,9 +715,12 @@ webapp/templates/index.html
 webapp/templates/login.html
 webapp/templates/output.html    shared by /wireguard and /clients
 webapp/templates/manage.html
+webapp/templates/metrics.html   the Metrics page
 webapp/static/site.css
 webapp/static/pico.min.css      vendored, not CDN-loaded - see "Web UI"
 webapp/static/htmx.min.js       vendored, not CDN-loaded - see "Web UI"
 webapp/static/htmx-ext-sse.js   vendored, not CDN-loaded - see "Web UI"
+webapp/static/metrics.js        the Metrics page's chart code
+webapp/static/uPlot.iife.min.js vendored charting library (+ uPlot.min.css, uPlot.LICENSE)
 webapp/static/favicon.svg
 ```

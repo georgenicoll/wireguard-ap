@@ -2,9 +2,12 @@
 the health checks. Plain code only - the fixtures are in conftest.py.
 """
 import html
+import json
 import re
 import socket
+import socketserver
 import subprocess
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -154,3 +157,83 @@ def pi_health_problems(pi: PiConfig) -> list[str]:
     if not pi.out("ps -o user= -C python").split() or "mnh-web" not in pi.out("ps -o user= -C python"):
         problems.append("the web app is not running as mnh-web")
     return problems
+
+
+# --------------------------------------------------------------------------
+# A stand-in for the simple-metrics collector, for testing the web app
+# --------------------------------------------------------------------------
+class FakeCollector:
+    """Speaks the collector's JSON-lines protocol on a Unix socket, giving
+    made-up but plausible data, and remembers every request it was sent so a
+    test can check exactly what the web app asked for.
+
+    `mode` is "ok", "error" (answers every request with a failure) or "down"
+    (hangs up without answering, as a crashed collector would)."""
+
+    METRICS = [
+        {"name": "cpu_percent", "label": "CPU", "unit": "%"},
+        {"name": "load1", "label": "Load (1 min)", "unit": ""},
+        {"name": "mem_used_bytes", "label": "Memory used", "unit": "bytes"},
+        {"name": "cpu_temp_celsius", "label": "CPU temperature", "unit": "\u00b0C"},
+        {"name": "net_eth0_rx_bytes_per_sec", "label": "eth0 received", "unit": "bytes/s"},
+    ]
+
+    def __init__(self, path: Path):
+        self.path = path
+        self.mode = "ok"
+        self.requests: list[dict] = []
+        collector = self
+
+        class Handler(socketserver.StreamRequestHandler):
+            def handle(self) -> None:
+                for line in self.rfile:
+                    request = json.loads(line)
+                    collector.requests.append(request)
+                    if collector.mode == "down":
+                        return
+                    reply = collector.reply(request)
+                    self.wfile.write(json.dumps(reply).encode() + b"\n")
+
+        self.server = socketserver.ThreadingUnixStreamServer(str(path), Handler)
+        self.server.daemon_threads = True
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+
+    def start(self) -> None:
+        self.thread.start()
+
+    def stop(self) -> None:
+        self.server.shutdown()
+        self.server.server_close()
+
+    def reset(self) -> None:
+        self.mode = "ok"
+        self.requests.clear()
+
+    def reply(self, request: dict) -> dict:
+        if self.mode == "error":
+            return {"ok": False, "v": 1, "error": "boom"}
+        op = request.get("op")
+        if op == "metrics":
+            return {"ok": True, "v": 1, "metrics": self.METRICS}
+        if op == "read":
+            return self.read(request)
+        return {"ok": False, "v": 1, "error": f"unknown op {op!r}"}
+
+    def read(self, request: dict) -> dict:
+        import math
+        import time
+
+        names = request["metrics"]
+        now = int(time.time() * 1000)
+        start = request.get("from", now - 3_600_000)
+        step = max(5000, -(-(now - start) // request["max_points"]))
+        step = -(-step // 5000) * 5000
+        stamps = list(range(start - start % step, now + 1, step))
+        avg = {n: [] for n in names}
+        for i, t in enumerate(stamps):
+            for n in names:
+                # One gap, in the middle, so the chart has something to break on.
+                avg[n].append(None if i == len(stamps) // 2 else 50 + 30 * math.sin(t / 600_000))
+        scale = lambda cols, f: {n: [None if v is None else v * f for v in c] for n, c in cols.items()}
+        return {"ok": True, "v": 1, "step_ms": step, "timestamps": stamps, "series": avg,
+                "min": scale(avg, 0.8), "max": scale(avg, 1.2)}

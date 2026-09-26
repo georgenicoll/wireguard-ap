@@ -10,6 +10,7 @@
 # ///
 import asyncio
 import html
+import json
 import logging
 import os
 import re
@@ -22,7 +23,7 @@ import uuid
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
@@ -628,6 +629,127 @@ def healthz():
     # when the server (and so the Pi) is back up, before there's any
     # session to be logged into again.
     return "ok"
+
+
+# --- Metrics -----------------------------------------------------------------
+# The Pi's history of CPU, memory, temperature and network use is kept by a
+# separate daemon, simple-metrics (see the README's "Metrics collector"),
+# which serves it as JSON lines on a Unix socket. This app only asks it for
+# what a chart needs and passes that on; the collector does the summarising.
+METRICS_SOCKET = os.environ.get("METRICS_SOCKET", "/run/simple-metrics/simple-metrics.sock")
+# How long to wait for the collector before giving up on a request.
+METRICS_TIMEOUT = 5.0
+# The most a reply may be (a downsampled one is a few tens of KB).
+METRICS_MAX_REPLY = 8 * 1024 * 1024
+# The time ranges the page offers, by name, in seconds.
+METRICS_RANGES = {"1h": 3600, "6h": 6 * 3600, "24h": 24 * 3600, "7d": 7 * 24 * 3600}
+# A chart has nowhere near this many pixels, so more points would only cost
+# time and bandwidth: the collector averages down to (at most) this many.
+METRICS_POINTS = 600
+# The characters a metric name may have (interface names come into them).
+# Checked before a name goes anywhere near the collector.
+METRIC_NAME = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+
+
+class MetricsUnavailable(Exception):
+    """The collector couldn't be reached, or refused the request."""
+
+
+async def _metrics_request(request: dict) -> dict:
+    """Sends one request to the collector and returns its (successful) reply."""
+    try:
+        async with asyncio.timeout(METRICS_TIMEOUT):
+            reader, writer = await asyncio.open_unix_connection(
+                METRICS_SOCKET, limit=METRICS_MAX_REPLY
+            )
+            try:
+                writer.write(json.dumps(request).encode() + b"\n")
+                await writer.drain()
+                line = await reader.readline()
+            finally:
+                writer.close()
+    except (OSError, TimeoutError, ValueError) as e:
+        # ValueError is a reply over the limit. Never shown to the user in
+        # full: the details go to the log.
+        LOGGER.warning("Metrics collector request failed: %r", e)
+        raise MetricsUnavailable("the metrics collector isn't reachable") from e
+    try:
+        reply = json.loads(line)
+    except ValueError as e:
+        LOGGER.warning("Metrics collector sent something that isn't JSON: %r", line[:200])
+        raise MetricsUnavailable("the metrics collector gave an unusable reply") from e
+    if not isinstance(reply, dict) or not reply.get("ok"):
+        LOGGER.warning("Metrics collector refused a request: %r", reply)
+        raise MetricsUnavailable("the metrics collector refused the request")
+    return reply
+
+
+def _metric_groups(metrics: list[dict]) -> list[tuple[str, list[dict]]]:
+    """The metrics as (heading, metrics) for the picker, in a sensible order."""
+    system = [m for m in metrics if not m["name"].startswith("net_")]
+    network = [m for m in metrics if m["name"].startswith("net_")]
+    return [(name, group) for name, group in (("System", system), ("Network", network)) if group]
+
+
+@app.get("/metrics", response_class=HTMLResponse, dependencies=[Depends(require_login)])
+async def metrics_page(request: Request):
+    error = None
+    groups: list[tuple[str, list[dict]]] = []
+    try:
+        groups = _metric_groups((await _metrics_request({"op": "metrics"}))["metrics"])
+    except MetricsUnavailable as e:
+        error = str(e)
+    return templates.TemplateResponse(
+        request,
+        "metrics.html",
+        {"show_logout": True, "groups": groups, "ranges": list(METRICS_RANGES), "error": error},
+    )
+
+
+@app.get("/metrics/data", dependencies=[Depends(require_login)])
+async def metrics_data(metric: str = "", range: str = "1h"):
+    if not METRIC_NAME.fullmatch(metric):
+        return JSONResponse({"error": "no such metric"}, status_code=400)
+    if range not in METRICS_RANGES:
+        return JSONResponse(
+            {"error": f"range must be one of {', '.join(METRICS_RANGES)}"}, status_code=400
+        )
+    try:
+        listing = (await _metrics_request({"op": "metrics"}))["metrics"]
+        known = next((m for m in listing if m["name"] == metric), None)
+        if known is None:
+            return JSONResponse({"error": "no such metric"}, status_code=404)
+        now_ms = int(time.time() * 1000)
+        reply = await _metrics_request(
+            {
+                "op": "read",
+                "metrics": [metric],
+                "from": now_ms - METRICS_RANGES[range] * 1000,
+                "max_points": METRICS_POINTS,
+                "extremes": True,
+            }
+        )
+        return JSONResponse(
+            {
+                "metric": known,
+                "range": range,
+                "now": now_ms,
+                "step_ms": reply["step_ms"],
+                "timestamps": reply["timestamps"],
+                "avg": reply["series"][metric],
+                "min": reply["min"][metric],
+                "max": reply["max"][metric],
+            },
+            headers={"Cache-Control": "no-store"},
+        )
+    except MetricsUnavailable as e:
+        return JSONResponse({"error": str(e).capitalize() + "."}, status_code=503)
+    except (KeyError, TypeError) as e:
+        # A reply that isn't shaped as expected, e.g. from an older collector.
+        LOGGER.warning("Unexpected reply from the metrics collector: %r", e)
+        return JSONResponse(
+            {"error": "The metrics collector isn't giving usable data."}, status_code=503
+        )
 
 
 @app.get("/login", response_class=HTMLResponse)

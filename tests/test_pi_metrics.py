@@ -31,6 +31,12 @@ class TestPiMetrics:
         assert pi.out("/usr/local/bin/simple-metrics --version").strip() == \
             f"simple-metrics {pinned_version()}"
 
+    def test_smq_is_in_the_deploy_users_home_and_is_the_pinned_release(self, pi):
+        if tuple(int(n) for n in pinned_version().split(".")) < (0, 3, 0):
+            pytest.skip("the pinned release predates smq")
+        assert pi.out("stat -c '%a %U' ~/smq").strip() == f"755 {pi.out('id -un').strip()}"
+        assert pi.out("~/smq --version").strip() == f"smq {pinned_version()}"
+
     def test_the_binary_is_root_owned_and_cannot_be_changed_by_the_services(self, pi):
         assert pi.out("stat -c '%a %U %G' /usr/local/bin/simple-metrics").strip() == "755 root root"
 
@@ -81,3 +87,50 @@ class TestPiMetrics:
         # login: there is no way in from the deploy user's own shell.
         r = pi.ssh(f"test -r {SOCKET} && test -w {SOCKET}")
         assert r.returncode != 0
+
+
+def metric_names(html: str) -> list[str]:
+    select = re.search(r'<select id="metric-select".*?</select>', html, re.S).group(0)
+    return re.findall(r'<option value="([^"]+)"', select)
+
+
+@pytest.mark.smoke
+class TestPiMetricsPage:
+    """The Metrics page and its data, through the deployed web app."""
+
+    def test_the_page_needs_a_login(self, pi):
+        from support import Web
+        anonymous = Web(pi.base_url, "not-the-passkey")
+        for path in ("/metrics", "/metrics/data?metric=cpu_percent&range=1h"):
+            r = anonymous.get(path)
+            assert r.status_code in (303, 401) or r.url.path == "/login", path
+
+    def test_the_page_lists_every_metric_the_collector_records(self, pi_web):
+        r = pi_web.get("/metrics")
+        assert r.status_code == 200
+        assert "No metrics available" not in r.text, "the web app cannot reach the collector"
+        names = metric_names(r.text)
+        assert len(names) == 15, names
+        assert {"cpu_percent", "load1", "mem_used_bytes", "swap_used_bytes",
+                "cpu_temp_celsius"} <= set(names)
+
+    def test_every_metric_returns_a_series_for_every_range(self, pi_web):
+        names = metric_names(pi_web.get("/metrics").text)
+        for name in names:
+            for span in ("1h", "7d"):
+                r = pi_web.get(f"/metrics/data?metric={name}&range={span}")
+                assert r.status_code == 200, (name, span, r.text)
+                data = r.json()
+                n = len(data["timestamps"])
+                assert n > 0 and n <= 600, (name, span, n)
+                assert len(data["avg"]) == len(data["min"]) == len(data["max"]) == n
+
+    def test_the_data_is_recent(self, pi_web):
+        data = pi_web.get("/metrics/data?metric=cpu_percent&range=1h").json()
+        newest = data["timestamps"][-1]
+        assert data["now"] - newest < 60_000, "the collector has stopped recording"
+
+    def test_bad_requests_are_refused(self, pi_web):
+        assert pi_web.get("/metrics/data?metric=nope&range=1h").status_code == 404
+        assert pi_web.get("/metrics/data?metric=cpu_percent&range=1y").status_code == 400
+        assert pi_web.get("/metrics/data?metric=../etc&range=1h").status_code == 400

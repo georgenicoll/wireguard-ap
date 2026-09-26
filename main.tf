@@ -21,6 +21,8 @@ locals {
   # never take the access point down. The empty default of
   # simple_metrics_binary (tofu run without wga) skips it.
   metrics_enabled = var.simple_metrics_binary != ""
+  # smq, the collector's command-line client, goes to the deploy user's home.
+  cli_enabled = local.metrics_enabled && var.simple_metrics_cli != ""
 
   # Every file under webapp/ (app.py, templates/, static/), so a change to
   # any of them - not just app.py - triggers a redeploy.
@@ -301,5 +303,37 @@ resource "terraform_data" "metrics_deploy" {
       # user's sudoers entry - see README's sudoers section.
       "${local.remote_dir}/setup_metrics.sh",
     ]
+  }
+}
+
+# smq, the collector's command-line client, in the deploy user's home
+# directory (~/smq). Its own resource, like the collector's: a new release
+# replaces it without touching anything else. It needs no root, and no
+# installing: it is only ever run by hand. (Running it against the collector's
+# socket does need permission - see README, "Metrics collector".)
+resource "terraform_data" "metrics_cli" {
+  count = local.cli_enabled ? 1 : 0
+
+  triggers_replace = {
+    cli = filesha256(var.simple_metrics_cli)
+  }
+
+  connection {
+    type        = "ssh"
+    host        = var.pi_host
+    user        = var.pi_user
+    private_key = var.ssh_private_key_path != "" ? file(var.ssh_private_key_path) : null
+    agent       = var.ssh_private_key_path == ""
+    timeout     = "20s"
+  }
+
+  provisioner "file" {
+    source      = var.simple_metrics_cli
+    destination = "${local.remote_dir}/smq"
+  }
+
+  provisioner "remote-exec" {
+    # Uploading over an existing file keeps its old mode.
+    inline = ["chmod 755 ${local.remote_dir}/smq"]
   }
 }

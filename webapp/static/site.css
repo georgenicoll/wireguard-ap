@@ -412,3 +412,29 @@ select.fit-content {
 .diagnostic-picker {
   margin-bottom: var(--pico-spacing);
 }
+
+/* The Metrics page (see metrics.js): the pickers sit side by side above the
+   chart, and wrap on a narrow screen. */
+.metric-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1.5rem;
+  margin-bottom: var(--pico-spacing);
+}
+.chart {
+  min-height: 320px;
+}
+/* uPlot draws its own legend; keep it clear of the axis and the same size as
+   the rest of the page's small text. */
+.chart .u-legend {
+  font-size: 0.8rem;
+  text-align: left;
+}
+.chart-status {
+  font-size: 0.8rem;
+  color: var(--pico-muted-color);
+  margin-top: 0.5rem;
+}
+.chart-status.error {
+  color: var(--pico-del-color);
+}
