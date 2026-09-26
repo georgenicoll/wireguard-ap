@@ -50,9 +50,12 @@ class TestPiMetrics:
     def test_the_sudo_rule_covers_smq_and_nothing_else(self, pi):
         assert pi.out("stat -c '%a %U %G' /usr/local/libexec/smq /usr/local/bin/smq").split("\n")[:2] == \
             ["755 root root", "755 root root"]
-        # No password is wanted for smq, but is for anything else with that group.
-        assert pi.ssh("sudo -n -g mnh-web /bin/true").returncode != 0
-        assert pi.ssh("sudo -n -g mnh-web /usr/local/libexec/smq --version").returncode == 0
+        # No password is wanted for smq, but is for anything else with that
+        # group. `sudo -K` first: a password typed recently in any session
+        # would otherwise still be remembered (the Pi's timestamps are global).
+        assert pi.ssh("sudo -K; sudo -n -g mnh-web /bin/true").returncode != 0
+        assert pi.ssh("sudo -K; sudo -n -g mnh-web /usr/local/libexec/smq --version").returncode == 0
+        assert pi.ssh("sudo -K; smq --version").returncode == 0
 
     def test_the_binary_is_root_owned_and_cannot_be_changed_by_the_services(self, pi):
         assert pi.out("stat -c '%a %U %G' /usr/local/bin/simple-metrics").strip() == "755 root root"
