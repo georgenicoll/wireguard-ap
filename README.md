@@ -369,23 +369,28 @@ restarted, which is the point of a separate service. It is lost when the
 collector itself restarts (an upgrade, a crash) and on a reboot.
 
 **The `smq` client.** Each release also carries `smq`, a command-line client
-for the collector's socket (`smq info`, `smq latest`,
-`smq read --metric cpu_percent --from 1h --points 60`; `smq --help` for the
-rest). `./wga apply` puts the pinned release's copy in the deploy user's home
-directory as `~/smq`, through its own `metrics_cli` resource, so a new release
-replaces just that. (Releases before 0.3.0 don't have one, and are deployed
-without it.) It defaults to `/run/simple-metrics/simple-metrics.sock`, and the
-deploy user is deliberately *not* allowed to use that socket, so run it with
-the web app's group:
+for the collector's socket. On the Pi, as the deploy user, with no password:
 
 ```bash
-sudo -g mnh-web ~/smq latest
+smq info
+smq latest
+smq read --metric cpu_percent --from 1h --points 60 --extremes
+smq --help
 ```
 
-That asks for your password, and needs sudo to allow running as that group.
-Don't add a passwordless (`NOPASSWD`) rule for it: `~/smq` is in your own home,
-so anything able to run as you could swap it for something else and get the
-web app's group for free.
+The deploy user is deliberately *not* allowed to use the collector's socket,
+so this goes through a narrow door that `setup_metrics.sh` builds: the real
+client is `/usr/local/libexec/smq` (root-owned), `/usr/local/bin/smq` is a
+two-line wrapper running it as `sudo -n -g mnh-web`, and
+`/etc/sudoers.d/030-<pi_user>-smq` lets `pi_user` - only - run exactly that
+binary with that group, without a password. The group only lets it connect to
+the one socket. The rule deliberately names the root-owned copy rather than
+`~/smq`: `~/smq` is a file in your own home, so a passwordless rule for it would
+let anything running as you swap it for something else and gain the group.
+(`~/smq`, the copy `./wga apply` uploads, is what gets installed; run
+directly it works for any socket you *can* reach, e.g. `--socket`.) Releases
+before 0.3.0 have no `smq`, and are deployed without it; a later deploy
+without it removes the installed files and the rule.
 
 **Running the collector locally.** In the simple-metrics repo, `./run_local.sh`
 builds it and runs it in the foreground on `/tmp/simple-metrics.sock`, and

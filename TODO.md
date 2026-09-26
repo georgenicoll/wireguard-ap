@@ -14,13 +14,12 @@ the uPlot chart (vendored), the fake collector for tests. Still to do:
       from the release's `SHA256SUMS`. The Pi runs v0.1.0 and the page needs
       v0.2.0+ (range, subset, downsampling), so the bump and the apply go
       together. (v0.2.0's checksum was `28466fa6…37332`.)
-- [ ] Decide how `~/smq` reaches the collector socket on the Pi: the deploy
-      user is deliberately locked out. Documented: `sudo -g mnh-web ~/smq …`
-      (password). Alternative: add the deploy user to `mnh-web`.
+- [x] `smq` works for the deploy user with no password: root-owned copy in
+      /usr/local/libexec, wrapper in /usr/local/bin, narrow sudoers rule.
 - [x] README: the Metrics page, `smq`, local running, tests table, layout;
       uPlot's licence added. (Re-check after the UI tests are written.)
 - [ ] After deploying: `./wga test smoke` (includes the new `~/smq` check),
-      and try `sudo -g mnh-web ~/smq latest` on the Pi.
+      and try `smq latest` on the Pi.
 - [ ] Run the full local tier (`uv run tests/integration.py local`), pyflakes,
       `tofu fmt` and `tofu validate`.
 - [ ] Commit, push, open a PR, merge (when asked).

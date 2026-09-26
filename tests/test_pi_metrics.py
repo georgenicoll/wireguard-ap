@@ -37,6 +37,23 @@ class TestPiMetrics:
         assert pi.out("stat -c '%a %U' ~/smq").strip() == f"755 {pi.out('id -un').strip()}"
         assert pi.out("~/smq --version").strip() == f"smq {pinned_version()}"
 
+    def test_smq_works_for_the_deploy_user_with_no_password(self, pi):
+        if tuple(int(n) for n in pinned_version().split(".")) < (0, 3, 0):
+            pytest.skip("the pinned release predates smq")
+        r = pi.ssh("smq info")
+        assert r.returncode == 0, r.stderr
+        assert "metrics      15" in r.stdout, r.stdout
+        assert "cpu_percent" in pi.out("smq metrics")
+        # Through the sudo rule, so a plain (unwrapped) ~/smq is still refused.
+        assert pi.ssh(f"~/smq --socket {SOCKET} info").returncode != 0
+
+    def test_the_sudo_rule_covers_smq_and_nothing_else(self, pi):
+        assert pi.out("stat -c '%a %U %G' /usr/local/libexec/smq /usr/local/bin/smq").split("\n")[:2] == \
+            ["755 root root", "755 root root"]
+        # No password is wanted for smq, but is for anything else with that group.
+        assert pi.ssh("sudo -n -g mnh-web /bin/true").returncode != 0
+        assert pi.ssh("sudo -n -g mnh-web /usr/local/libexec/smq --version").returncode == 0
+
     def test_the_binary_is_root_owned_and_cannot_be_changed_by_the_services(self, pi):
         assert pi.out("stat -c '%a %U %G' /usr/local/bin/simple-metrics").strip() == "755 root root"
 

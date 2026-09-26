@@ -262,11 +262,13 @@ resource "terraform_data" "ap_deploy" {
 # which setup_webapp.sh creates), but a change to ap_deploy doesn't redeploy
 # this: `depends_on` orders them, only `triggers_replace` decides re-runs.
 resource "terraform_data" "metrics_deploy" {
-  count      = local.metrics_enabled ? 1 : 0
-  depends_on = [terraform_data.ap_deploy]
+  count = local.metrics_enabled ? 1 : 0
+  # metrics_cli first, so ~/smq is in place for setup_metrics.sh to install.
+  depends_on = [terraform_data.ap_deploy, terraform_data.metrics_cli]
 
   triggers_replace = {
     binary = filesha256(var.simple_metrics_binary)
+    cli    = local.cli_enabled ? filesha256(var.simple_metrics_cli) : ""
     script = filesha256("${path.module}/scripts/setup_metrics.sh")
     # setup_metrics.sh reads the interface names from this.
     env_file = sha256(local.env_file)
@@ -299,6 +301,8 @@ resource "terraform_data" "metrics_deploy" {
       # Explicit modes for the same reason as in ap_deploy: uploading over an
       # existing file keeps its old mode.
       "chmod 755 ${local.remote_dir}/setup_metrics.sh ${local.remote_dir}/simple-metrics",
+      # No smq in this release: don't let an earlier release's copy be installed.
+      local.cli_enabled ? "true" : "rm -f ${local.remote_dir}/smq",
       # Self-elevates with sudo, so needs setup_metrics.sh in the deploy
       # user's sudoers entry - see README's sudoers section.
       "${local.remote_dir}/setup_metrics.sh",
@@ -307,10 +311,10 @@ resource "terraform_data" "metrics_deploy" {
 }
 
 # smq, the collector's command-line client, in the deploy user's home
-# directory (~/smq). Its own resource, like the collector's: a new release
-# replaces it without touching anything else. It needs no root, and no
-# installing: it is only ever run by hand. (Running it against the collector's
-# socket does need permission - see README, "Metrics collector".)
+# directory (~/smq), where metrics_deploy's setup_metrics.sh picks it up and
+# installs the root-owned copy that `smq` (a wrapper, in /usr/local/bin) runs
+# with the web app's group, which is what lets it use the collector's socket.
+# The copy in the home directory works too, for a socket you can reach.
 resource "terraform_data" "metrics_cli" {
   count = local.cli_enabled ? 1 : 0
 
