@@ -383,24 +383,32 @@ class TestMainTf:
         block = re.search(r'resource "terraform_data" "metrics_deploy" \{(.*?)\n\}\n', text, re.S).group(1)
         assert "terraform_data.ap_deploy" in re.search(r"depends_on = \[(.*?)\]", block).group(1)
         assert "count = local.metrics_enabled ? 1 : 0" in block
-        assert "filesha256(var.simple_metrics_binary)" in block
+        assert "filesha256(var.simple_metrics_binary)" in text  # in local.metrics_triggers
         assert "setup_metrics.sh" in block
 
     def test_smq_is_delivered_to_the_deploy_users_home_by_its_own_resource(self):
         text = self.main_tf()
         block = re.search(r'resource "terraform_data" "metrics_cli" \{(.*?)\n\}\n', text, re.S).group(1)
         assert "count = local.cli_enabled ? 1 : 0" in block
-        assert "filesha256(var.simple_metrics_cli)" in block
         assert 'destination = "${local.remote_dir}/smq"' in block
         # The collector's setup installs it from there, so must run after it,
         # and re-run when it changes.
         deploy = re.search(r'resource "terraform_data" "metrics_deploy" \{(.*?)\n\}\n', text, re.S).group(1)
         assert "terraform_data.metrics_cli" in deploy
-        assert "filesha256(var.simple_metrics_cli)" in deploy
+        assert "filesha256(var.simple_metrics_cli)" in text  # in local.metrics_triggers
         assert "remote_dir = \"/home/${var.pi_user}\"" in text
         # Not part of what re-runs the access point's setup or the collector's.
         ap = re.search(r'resource "terraform_data" "ap_deploy" \{(.*?)\n\}\n', text, re.S).group(1)
         assert "simple_metrics_cli" not in ap
+
+    def test_smq_is_uploaded_again_whenever_the_collector_setup_re_runs(self):
+        text = self.main_tf()
+        for name in ("metrics_deploy", "metrics_cli"):
+            block = re.search(rf'resource "terraform_data" "{name}" \{{(.*?)\n\}}\n', text, re.S).group(1)
+            assert "triggers_replace = local.metrics_triggers" in block, name
+        triggers = re.search(r"metrics_triggers = (.*?)\n  \} : \{\}", text, re.S).group(1)
+        for wanted in ("simple_metrics_binary", "simple_metrics_cli", "setup_metrics.sh", "local.env_file"):
+            assert wanted in triggers, wanted
 
     def test_the_cli_variable_defaults_to_off(self):
         variables = (REPO / "variables.tf").read_text()

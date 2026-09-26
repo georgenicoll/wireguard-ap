@@ -23,6 +23,14 @@ locals {
   metrics_enabled = var.simple_metrics_binary != ""
   # smq, the collector's command-line client, goes to the deploy user's home.
   cli_enabled = local.metrics_enabled && var.simple_metrics_cli != ""
+  # What makes the collector's deploy re-run (shared with metrics_cli).
+  metrics_triggers = local.metrics_enabled ? {
+    binary = filesha256(var.simple_metrics_binary)
+    cli    = local.cli_enabled ? filesha256(var.simple_metrics_cli) : ""
+    script = filesha256("${path.module}/scripts/setup_metrics.sh")
+    # setup_metrics.sh reads the interface names from this.
+    env_file = sha256(local.env_file)
+  } : {}
 
   # Every file under webapp/ (app.py, templates/, static/), so a change to
   # any of them - not just app.py - triggers a redeploy.
@@ -266,13 +274,7 @@ resource "terraform_data" "metrics_deploy" {
   # metrics_cli first, so ~/smq is in place for setup_metrics.sh to install.
   depends_on = [terraform_data.ap_deploy, terraform_data.metrics_cli]
 
-  triggers_replace = {
-    binary = filesha256(var.simple_metrics_binary)
-    cli    = local.cli_enabled ? filesha256(var.simple_metrics_cli) : ""
-    script = filesha256("${path.module}/scripts/setup_metrics.sh")
-    # setup_metrics.sh reads the interface names from this.
-    env_file = sha256(local.env_file)
-  }
+  triggers_replace = local.metrics_triggers
 
   connection {
     type        = "ssh"
@@ -318,9 +320,10 @@ resource "terraform_data" "metrics_deploy" {
 resource "terraform_data" "metrics_cli" {
   count = local.cli_enabled ? 1 : 0
 
-  triggers_replace = {
-    cli = filesha256(var.simple_metrics_cli)
-  }
+  # The same triggers as metrics_deploy, so whenever setup_metrics.sh re-runs
+  # ~/smq is uploaded again first: it installs from there, and finding it
+  # missing (deleted by hand, say) would remove the installed smq.
+  triggers_replace = local.metrics_triggers
 
   connection {
     type        = "ssh"
