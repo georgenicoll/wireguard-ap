@@ -239,9 +239,59 @@ def print_unit(tmp_path: Path, if_24="wlan0", if_5="wlan1", br="br-ap") -> subpr
     """Runs setup_metrics.sh --print-unit next to a fake env file. (It needs
     neither root nor a Pi: it only prints.)"""
     shutil.copy(SETUP, tmp_path / "setup_metrics.sh")
-    (tmp_path / "wireguard-ap.env").write_text(f"IF_24='{if_24}'\nIF_5='{if_5}'\nBR='{br}'\n")
+    (tmp_path / "wireguard-ap.env").write_text(
+        f"PI_USER='george'\nIF_24='{if_24}'\nIF_5='{if_5}'\nBR='{br}'\n")
     return subprocess.run([str(tmp_path / "setup_metrics.sh"), "--print-unit"],
                           capture_output=True, text=True, timeout=30)
+
+
+def print_smq(tmp_path: Path, what: str, pi_user="george") -> subprocess.CompletedProcess:
+    shutil.copy(SETUP, tmp_path / "setup_metrics.sh")
+    (tmp_path / "wireguard-ap.env").write_text(
+        f"PI_USER='{pi_user}'\nIF_24='wlan0'\nIF_5='wlan1'\nBR='br-ap'\n")
+    return subprocess.run([str(tmp_path / "setup_metrics.sh"), f"--print-{what}"],
+                          capture_output=True, text=True, timeout=30)
+
+
+@pytest.mark.local
+class TestSmqAccess:
+    """The deploy user may use the collector's socket only through a root-owned
+    smq and a narrow sudo rule, never through a file in their own home."""
+
+    def test_the_sudoers_rule_is_exactly_one_root_owned_binary_with_the_web_group(self, tmp_path):
+        r = print_smq(tmp_path, "sudoers")
+        assert r.returncode == 0, r.stderr
+        assert r.stdout.strip() == "george ALL=(:mnh-web) NOPASSWD: /usr/local/libexec/smq"
+
+    def test_the_rule_never_names_a_file_in_a_home_directory(self, tmp_path):
+        assert "/home" not in print_smq(tmp_path, "sudoers").stdout
+
+    def test_the_sudoers_rule_is_accepted_by_visudo(self, tmp_path):
+        if not shutil.which("visudo"):
+            pytest.skip("visudo not installed")
+        rule = tmp_path / "rule"
+        rule.write_text(print_smq(tmp_path, "sudoers").stdout)
+        r = subprocess.run(["visudo", "-cf", str(rule)], capture_output=True, text=True)
+        assert r.returncode == 0, r.stdout + r.stderr
+
+    def test_the_wrapper_runs_the_root_owned_binary_with_the_web_group_and_never_prompts(self, tmp_path):
+        r = print_smq(tmp_path, "wrapper")
+        assert 'exec sudo -n -g mnh-web /usr/local/libexec/smq "$@"' in r.stdout
+        assert subprocess.run(["sh", "-n"], input=r.stdout, text=True).returncode == 0
+
+    @pytest.mark.parametrize("bad", ["", "a b", "x;y", "Root", "$(id)", "a" * 40])
+    def test_a_bad_user_name_stops_everything(self, tmp_path, bad):
+        for what in ("sudoers", "wrapper", "unit"):
+            r = print_smq(tmp_path, what, pi_user=bad)
+            assert r.returncode != 0 and "bad PI_USER" in r.stderr, (what, bad)
+
+    def test_the_script_installs_smq_and_the_rule_only_after_checking_it_runs(self):
+        text = SETUP.read_text()
+        assert text.index('"${CLI}.new" --version') < text.index('mv -f "${CLI}.new" "$CLI"')
+        assert text.index('visudo -cf "$SUDOERS_TMP"') < text.index('install -o root -g root -m 0440 "$SUDOERS_TMP"')
+
+    def test_a_release_without_smq_removes_an_earlier_install(self):
+        assert 'rm -f "$CLI" "$CLI_WRAPPER" "$CLI_SUDOERS"' in SETUP.read_text()
 
 
 @pytest.mark.local
@@ -331,8 +381,8 @@ class TestMainTf:
     def test_the_collector_is_its_own_resource_that_runs_after_ap_deploy(self):
         text = self.main_tf()
         block = re.search(r'resource "terraform_data" "metrics_deploy" \{(.*?)\n\}\n', text, re.S).group(1)
-        assert "depends_on = [terraform_data.ap_deploy]" in block
-        assert "count      = local.metrics_enabled ? 1 : 0" in block
+        assert "terraform_data.ap_deploy" in re.search(r"depends_on = \[(.*?)\]", block).group(1)
+        assert "count = local.metrics_enabled ? 1 : 0" in block
         assert "filesha256(var.simple_metrics_binary)" in block
         assert "setup_metrics.sh" in block
 
@@ -342,11 +392,15 @@ class TestMainTf:
         assert "count = local.cli_enabled ? 1 : 0" in block
         assert "filesha256(var.simple_metrics_cli)" in block
         assert 'destination = "${local.remote_dir}/smq"' in block
+        # The collector's setup installs it from there, so must run after it,
+        # and re-run when it changes.
+        deploy = re.search(r'resource "terraform_data" "metrics_deploy" \{(.*?)\n\}\n', text, re.S).group(1)
+        assert "terraform_data.metrics_cli" in deploy
+        assert "filesha256(var.simple_metrics_cli)" in deploy
         assert "remote_dir = \"/home/${var.pi_user}\"" in text
         # Not part of what re-runs the access point's setup or the collector's.
-        for name in ("ap_deploy", "metrics_deploy"):
-            other = re.search(rf'resource "terraform_data" "{name}" \{{(.*?)\n\}}\n', text, re.S).group(1)
-            assert "simple_metrics_cli" not in other, name
+        ap = re.search(r'resource "terraform_data" "ap_deploy" \{(.*?)\n\}\n', text, re.S).group(1)
+        assert "simple_metrics_cli" not in ap
 
     def test_the_cli_variable_defaults_to_off(self):
         variables = (REPO / "variables.tf").read_text()

@@ -18,14 +18,31 @@
 # main.tf's metrics_deploy) and installed to /usr/local/bin, root-owned, so
 # METRICS_USER can run it but never replace it.
 #
-#   setup_metrics.sh --print-unit   prints the systemd unit it would install
-#                                   and exits (no root needed) - for tests.
+# It also installs smq, the collector's command-line client, if one was
+# uploaded (as ./smq), so PI_USER can query the collector without a password:
+#
+#   /usr/local/libexec/smq   the real client, root-owned
+#   /usr/local/bin/smq       a two-line wrapper: sudo -g mnh-web <the above> "$@"
+#   /etc/sudoers.d/030-...   lets PI_USER (and only PI_USER) run exactly that
+#                            binary, with the web app's group and no password
+#
+# PI_USER is denied the socket on purpose (see above), and this is the narrow
+# way back in: the rule names a root-owned file PI_USER can't change (a rule
+# for a file in PI_USER's own home would let anything running as PI_USER
+# swap the file and gain the group). The group is only the ability to
+# connect to this one socket.
+#
+#   setup_metrics.sh --print-unit     prints the systemd unit it would install
+#   setup_metrics.sh --print-sudoers  ... the sudoers rule for smq
+#   setup_metrics.sh --print-wrapper  ... the /usr/local/bin/smq wrapper
+#                                     Each exits without needing root: for tests.
 set -euo pipefail
 
 SCRIPT="$(readlink -f "$0")"
 SCRIPT_DIR="$(dirname "$SCRIPT")"
 ENV_FILE="${SCRIPT_DIR}/wireguard-ap.env"
 BINARY_SRC="${SCRIPT_DIR}/simple-metrics"
+CLI_SRC="${SCRIPT_DIR}/smq"     # optional: releases before 0.3.0 have none
 [[ -f $ENV_FILE ]] || { echo "missing env file: $ENV_FILE" >&2; exit 1; }
 # shellcheck source=/dev/null
 source "$ENV_FILE"
@@ -36,6 +53,9 @@ METRICS_USER="mnh-metrics"
 WEB_GROUP="mnh-web"
 SERVICE="mnh-ap-metrics"
 BINARY="/usr/local/bin/simple-metrics"
+CLI="/usr/local/libexec/smq"
+CLI_WRAPPER="/usr/local/bin/smq"
+CLI_SUDOERS="/etc/sudoers.d/030-${PI_USER}-smq"
 SOCKET_DIR_NAME="simple-metrics"                    # /run/<this>, made by systemd
 SOCKET="/run/${SOCKET_DIR_NAME}/simple-metrics.sock"
 INTERVAL="5s"
@@ -124,10 +144,29 @@ WantedBy=multi-user.target
 EOF
 }
 
-if [[ ${1:-} == --print-unit ]]; then
-  render_unit
-  exit 0
-fi
+[[ $PI_USER =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] || { echo "bad PI_USER: '$PI_USER'" >&2; exit 1; }
+
+render_sudoers() {
+  # (:group) = keep the calling user, add this group. No arguments are listed,
+  # so any are allowed: smq only ever connects to a socket and prints.
+  echo "${PI_USER} ALL=(:${WEB_GROUP}) NOPASSWD: ${CLI}"
+}
+
+render_wrapper() {
+  cat <<EOF
+#!/bin/sh
+# Installed by setup_metrics.sh. Runs the metrics client with the web app's
+# group, which is what lets it use the collector's socket; sudo allows that
+# for ${PI_USER} only, and without a password.
+exec sudo -n -g ${WEB_GROUP} ${CLI} "\$@"
+EOF
+}
+
+case "${1:-}" in
+  --print-unit) render_unit; exit 0 ;;
+  --print-sudoers) render_sudoers; exit 0 ;;
+  --print-wrapper) render_wrapper; exit 0 ;;
+esac
 
 [[ -f $BINARY_SRC ]] || { echo "missing binary: $BINARY_SRC (main.tf uploads it)" >&2; exit 1; }
 [[ $EUID -eq 0 ]] || exec sudo "$SCRIPT" "$@"
@@ -149,6 +188,31 @@ if ! "${BINARY}.new" --version >/dev/null; then
   exit 1
 fi
 mv -f "${BINARY}.new" "$BINARY"
+
+# smq, if this release has one. Installed the same careful way, and with its
+# sudoers rule checked by visudo before it is put in place (a bad sudoers file
+# can lock out sudo entirely). Without one (an older release), any earlier
+# install is removed, so a rule never points at a file that isn't there.
+if [[ -f $CLI_SRC ]]; then
+  install -d -o root -g root -m 0755 "$(dirname "$CLI")"
+  install -o root -g root -m 0755 "$CLI_SRC" "${CLI}.new"
+  if ! "${CLI}.new" --version >/dev/null; then
+    rm -f "${CLI}.new"
+    echo "the uploaded smq does not run on this machine" >&2
+    exit 1
+  fi
+  mv -f "${CLI}.new" "$CLI"
+  WRAPPER_TMP="$(mktemp)"
+  SUDOERS_TMP="$(mktemp)"
+  trap 'rm -f "$WRAPPER_TMP" "$SUDOERS_TMP"' EXIT
+  render_wrapper >"$WRAPPER_TMP"
+  render_sudoers >"$SUDOERS_TMP"
+  visudo -cf "$SUDOERS_TMP" >/dev/null
+  install -o root -g root -m 0755 "$WRAPPER_TMP" "$CLI_WRAPPER"
+  install -o root -g root -m 0440 "$SUDOERS_TMP" "$CLI_SUDOERS"
+else
+  rm -f "$CLI" "$CLI_WRAPPER" "$CLI_SUDOERS"
+fi
 
 render_unit >"/etc/systemd/system/${SERVICE}.service"
 systemctl daemon-reload
