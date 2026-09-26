@@ -106,7 +106,7 @@ class TestPiMetrics:
         if tuple(int(n) for n in pinned_version().split(".")) < (0, 4, 0):
             pytest.skip("the pinned release predates the history file")
         got = pi.out("stat -c '%a %U %G' /var/lib/simple-metrics").strip()
-        assert got == "700 mnh-metrics mnh-metrics", got
+        assert got == "700 mnh-metrics mnh-web", got
         assert "--state-dir /var/lib/simple-metrics" in pi.out(f"systemctl show -p ExecStart {SERVICE}")
 
     def test_it_says_what_it_loaded_at_startup(self, pi):
