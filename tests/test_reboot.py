@@ -1,6 +1,7 @@
 """OPT-IN: the Restart button, end to end. Never part of the default run.
 Tier: reboot.
 """
+import json
 import subprocess
 import time
 
@@ -10,10 +11,29 @@ import pytest
 from support import pi_health_problems
 
 
+def latest_timestamp(pi) -> int:
+    r = pi.ssh("smq --json latest")
+    return int(json.loads(r.stdout)["timestamp"]) if r.returncode == 0 else 0
+
+
 @pytest.mark.reboot
 def test_restart_button_reboots_the_pi_and_everything_comes_back(pi, browser):
     before = pi.out("cat /proc/sys/kernel/random/boot_id").strip()
     assert before
+    # The metrics history must come back too. It is saved every minute, so a
+    # record from at least two minutes before the restart has to survive it:
+    # wait until the collector has one to remember.
+    deadline = time.time() + 300
+    marker = 0
+    while time.time() < deadline:
+        newest = latest_timestamp(pi)
+        info = json.loads(pi.out("smq --json read --points 2 --metric load1") or "{}")
+        stamps = info.get("timestamps") or []
+        if newest and stamps and newest - stamps[0] >= 150_000:
+            marker = stamps[0] + 10_000
+            break
+        time.sleep(10)
+    assert marker, "the collector never had two minutes of history to keep"
     ctx = browser.new_context(ignore_https_errors=True)
     assert ctx.request.post(pi.base_url + "/login", form={"password": pi.psk},
                             max_redirects=0).status == 303
@@ -46,3 +66,11 @@ def test_restart_button_reboots_the_pi_and_everything_comes_back(pi, browser):
         time.sleep(5)
     assert not problems, problems
     assert httpx.get(pi.base_url + "/healthz", verify=False, timeout=10).status_code == 200
+
+    # The history from before the restart is still there (the newest minute may
+    # not be), with the restart itself as a gap after it.
+    r = pi.ssh(f"smq --json read --from {marker - 60_000} --to {marker + 60_000} --metric load1")
+    assert r.returncode == 0, r.stderr
+    kept = json.loads(r.stdout)["timestamps"]
+    assert kept, "the metrics history did not survive the restart"
+    assert min(kept) < marker + 60_000

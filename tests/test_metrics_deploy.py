@@ -319,6 +319,21 @@ class TestSetupMetricsScript:
         assert "--socket /run/simple-metrics/simple-metrics.sock" in exec_start
         assert "--interval 5s" in exec_start and "--retention 7d" in exec_start
 
+    def test_the_history_is_kept_on_disk_in_a_private_state_directory(self, tmp_path):
+        unit = print_unit(tmp_path).stdout
+        assert "\nStateDirectory=simple-metrics\n" in unit
+        assert "\nStateDirectoryMode=0700\n" in unit
+        exec_start = re.search(r"^ExecStart=(.*)$", unit, re.M).group(1)
+        assert "--state-dir /var/lib/simple-metrics" in exec_start
+        # ProtectSystem=strict makes everything else read-only: the state
+        # directory is what lets it write there, so it must not be widened.
+        assert "\nProtectSystem=strict\n" in unit
+        assert "ReadWritePaths" not in unit
+
+    def test_it_waits_for_the_clock_to_be_set(self, tmp_path):
+        unit = print_unit(tmp_path).stdout
+        assert "\nAfter=time-sync.target\n" in unit and "\nWants=time-sync.target\n" in unit
+
     def test_the_interfaces_come_from_the_env_file(self, tmp_path):
         exec_start = re.search(r"^ExecStart=(.*)$", print_unit(tmp_path, "wlx1", "wlx2", "br0").stdout, re.M).group(1)
         interfaces = re.findall(r"--interface (\S+)", exec_start)
