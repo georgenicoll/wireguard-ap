@@ -328,10 +328,11 @@ were built from.
 
 The Pi keeps a rolling history of its own CPU, load, memory, swap, temperature
 and network traffic (`eth0`, both radios, `br-ap` and `wg0`), sampled every 5
-seconds for 7 days, in memory only - nothing is written to disk. That is done
-by [simple-metrics](https://github.com/georgenicoll/simple-metrics), a small
-separate Rust daemon (about 15 MB of RAM when its history is full), which
-serves it on a Unix socket for the web app to read.
+seconds for 7 days. That is done by
+[simple-metrics](https://github.com/georgenicoll/simple-metrics), a small
+separate Rust daemon (about 17 MB of RAM, all taken when it starts), which
+serves it on a Unix socket for the web app to read. The history is also kept
+in a file, so it survives restarts and reboots.
 
 **How it gets there.** `simple-metrics.pin` names a release and the SHA-256 of
 its `aarch64` archive. `./wga` runs `tools/fetch_simple_metrics.sh`, which
@@ -365,8 +366,19 @@ back up. (A test checks this stays true.) It does run after `ap_deploy` on a
 first deploy, because it needs the web app's group.
 
 **What happens to the history.** It survives the web app being redeployed or
-restarted, which is the point of a separate service. It is lost when the
-collector itself restarts (an upgrade, a crash) and on a reboot.
+restarted, which is the point of a separate service. It also survives the
+collector restarting (an upgrade, a crash) and a reboot: the collector keeps it
+in `/var/lib/simple-metrics/history.bin` (a private directory that systemd
+creates for `mnh-metrics`, `StateDirectory=`), as small appends about once a
+minute - roughly 2 MB a day, gentle on the SD card - and reads it back at
+startup. A restart shows as a gap in the chart for as long as the collector was
+down; a power cut or crash loses at most the last minute. The Pi has no battery
+clock, so the unit waits for time sync (`time-sync.target`), and the collector
+holds samples back while its clock is behind the saved history rather than
+record wrong timestamps. If the metrics recorded change (different
+interfaces), the old file is ignored and started afresh. To start from an empty
+history on purpose: `sudo systemctl stop mnh-ap-metrics && sudo rm
+/var/lib/simple-metrics/history.bin && sudo systemctl start mnh-ap-metrics`.
 
 **The `smq` client.** Each release also carries `smq`, a command-line client
 for the collector's socket. On the Pi, as the deploy user, with no password:
@@ -622,7 +634,7 @@ are split by area, one file each:
 | `test_pi_metrics.py` | the deployed collector: runs unprivileged, its socket is closed to other accounts, it is the pinned release, `~/smq` is deployed; and the Metrics page and its data through the web app (`smoke`) |
 | `test_pi_web.py` | login/session security and the read-only pages (`smoke`) |
 | `test_pi_diagnostics.py` | every diagnostic through the deployed web app (`smoke`) |
-| `test_reboot.py` | the Restart button, end to end (`reboot`) |
+| `test_reboot.py` | the Restart button, end to end, including the metrics history coming back after the reboot (`reboot`) |
 
 `conftest.py` holds the fixtures (`pi`, `pi_web`, `local_server`, the browser
 ones) and `support.py` the shared code (the Pi config, the web client, the

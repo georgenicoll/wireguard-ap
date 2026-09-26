@@ -11,8 +11,11 @@
 #    privileges at all (everything it reads is world-readable), so the unit
 #    below drops every capability and locks the rest of the system down.
 #  - It is a separate service, so its history survives the web app being
-#    restarted by a redeploy. (It is lost when the collector itself is
-#    restarted or upgraded, and on a reboot: nothing is written to disk.)
+#    restarted by a redeploy. It also keeps the history in a file in its own
+#    state directory (STATE_DIR below), so it survives the collector being
+#    restarted or upgraded, and a reboot: each restart leaves a gap in the
+#    charts, not an empty history. The file is small appends (about 2 MB a
+#    day), gentle on the SD card; see simple-metrics' README.
 #
 # The binary is uploaded next to this script as ./simple-metrics (by
 # main.tf's metrics_deploy) and installed to /usr/local/bin, root-owned, so
@@ -58,6 +61,8 @@ CLI_WRAPPER="/usr/local/bin/smq"
 CLI_SUDOERS="/etc/sudoers.d/030-${PI_USER}-smq"
 SOCKET_DIR_NAME="simple-metrics"                    # /run/<this>, made by systemd
 SOCKET="/run/${SOCKET_DIR_NAME}/simple-metrics.sock"
+STATE_DIR_NAME="simple-metrics"                     # /var/lib/<this>, made by systemd
+STATE_DIR="/var/lib/${STATE_DIR_NAME}"
 INTERVAL="5s"
 RETENTION="7d"
 
@@ -92,6 +97,11 @@ render_unit() {
 [Unit]
 Description=simple-metrics collector for mnh-ap
 Documentation=https://github.com/georgenicoll/simple-metrics
+# The Pi has no battery clock: wait for the time to be set where the system
+# can tell (the collector also holds samples back while the clock is behind
+# its saved history, so this is the belt to that pair of braces).
+After=time-sync.target
+Wants=time-sync.target
 
 [Service]
 Type=simple
@@ -106,12 +116,17 @@ Group=${WEB_GROUP}
 RuntimeDirectory=${SOCKET_DIR_NAME}
 RuntimeDirectoryMode=0750
 UMask=0007
-ExecStart=${BINARY} --socket ${SOCKET} --interval ${INTERVAL} --retention ${RETENTION} ${INTERFACE_ARGS}
+# systemd creates /var/lib/${STATE_DIR_NAME} for the service, owned by the
+# user above and closed to everyone else; the history file is kept there.
+StateDirectory=${STATE_DIR_NAME}
+StateDirectoryMode=0700
+ExecStart=${BINARY} --socket ${SOCKET} --interval ${INTERVAL} --retention ${RETENTION} --state-dir ${STATE_DIR} ${INTERFACE_ARGS}
 Restart=on-failure
 RestartSec=5
 
-# Memory: about 15 MB of history, and roughly that again while a full read
-# is being copied out. A backstop against a fault, not a target.
+# Memory: about 15 MB of history, all taken at startup, and roughly that
+# again while a full read is being copied out. A backstop against a fault,
+# not a target.
 MemoryMax=128M
 TasksMax=64
 

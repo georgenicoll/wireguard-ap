@@ -102,6 +102,25 @@ class TestPiMetrics:
         rss_kib = int(pi.out("ps -o rss= -C simple-metrics").split()[0])
         assert rss_kib < 64 * 1024, f"{rss_kib // 1024} MiB"
 
+    def test_the_history_is_kept_in_a_private_state_directory(self, pi):
+        if tuple(int(n) for n in pinned_version().split(".")) < (0, 4, 0):
+            pytest.skip("the pinned release predates the history file")
+        got = pi.out("stat -c '%a %U %G' /var/lib/simple-metrics").strip()
+        assert got == "700 mnh-metrics mnh-metrics", got
+        assert "--state-dir /var/lib/simple-metrics" in pi.out(f"systemctl show -p ExecStart {SERVICE}")
+
+    def test_it_says_what_it_loaded_at_startup(self, pi):
+        if tuple(int(n) for n in pinned_version().split(".")) < (0, 4, 0):
+            pytest.skip("the pinned release predates the history file")
+        log = pi.out(f"journalctl -u {SERVICE} --no-pager -o cat")
+        assert "history:" in log, log
+
+    def test_the_whole_store_is_resident_from_the_start(self, pi):
+        if tuple(int(n) for n in pinned_version().split(".")) < (0, 4, 0):
+            pytest.skip("the pinned release predates pre-touching the store")
+        rss_kib = int(pi.out("ps -o rss= -C simple-metrics").split()[0])
+        assert rss_kib > 14 * 1024, f"only {rss_kib // 1024} MiB resident"
+
     def test_the_deploy_user_has_no_access_to_the_socket(self, pi):
         # The data is reachable only through the web app, and that needs the
         # login: there is no way in from the deploy user's own shell.
