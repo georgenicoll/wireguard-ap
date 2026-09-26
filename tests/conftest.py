@@ -10,7 +10,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from support import tfvar, free_port, REPO, SCRIPTS, PiConfig, Web, LOCAL_PSK, Target
+from support import tfvar, free_port, REPO, SCRIPTS, PiConfig, Web, LOCAL_PSK, Target, FakeCollector
 
 
 def pytest_configure(config):
@@ -49,7 +49,26 @@ def pi_web(pi) -> Web:
 
 
 @pytest.fixture(scope="session")
-def local_server():
+def fake_collector():
+    """A stand-in for the metrics collector, which the local web app talks to."""
+    directory = Path(tempfile.mkdtemp(prefix="wga-fc-"))
+    collector = FakeCollector(directory / "metrics.sock")
+    collector.start()
+    yield collector
+    collector.stop()
+    shutil.rmtree(directory, ignore_errors=True)
+
+
+@pytest.fixture
+def collector(fake_collector):
+    """The fake collector, put back to normal before and after each test."""
+    fake_collector.reset()
+    yield fake_collector
+    fake_collector.reset()
+
+
+@pytest.fixture(scope="session")
+def local_server(fake_collector):
     if not shutil.which("uv") or not shutil.which("openssl"):
         pytest.fail("the local tier needs uv and openssl on PATH")
     tmp = Path(tempfile.mkdtemp(prefix="wga-it-"))
@@ -65,6 +84,7 @@ def local_server():
         "PSK": LOCAL_PSK, "WEBAPP_HOST": "127.0.0.1", "WEBAPP_PORT": str(port),
         "WEBAPP_CERT": str(tmp / "c.pem"), "WEBAPP_KEY": str(tmp / "k.pem"),
         "PYTHONDONTWRITEBYTECODE": "1",
+        "METRICS_SOCKET": str(fake_collector.path),
     }
     log = open(tmp / "server.log", "w")
     # Own process group, so teardown stops exactly what this started.

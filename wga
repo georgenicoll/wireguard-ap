@@ -146,6 +146,10 @@ MSG
     if [[ -f "$REPO_DIR/simple-metrics.pin" || -n "${SIMPLE_METRICS_BIN:-}" ]]; then
         TF_VAR_simple_metrics_binary="$("$REPO_DIR/tools/fetch_simple_metrics.sh")"
         export TF_VAR_simple_metrics_binary
+        # Its command-line client (smq), from the same archive; empty for
+        # releases that predate it.
+        TF_VAR_simple_metrics_cli="$("$REPO_DIR/tools/fetch_simple_metrics.sh" --cli)"
+        export TF_VAR_simple_metrics_cli
     fi
     ;;
 esac

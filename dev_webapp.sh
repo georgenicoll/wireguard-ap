@@ -41,8 +41,16 @@ export WEBAPP_PORT="8443"
 export WEBAPP_CERT="$CERT"
 export WEBAPP_KEY="$KEY"
 export WEBAPP_RELOAD="1"
+# The Metrics page talks to a locally running simple-metrics: start it with
+# run_local.sh in the simple-metrics repo (its default socket is this one).
+export METRICS_SOCKET="${METRICS_SOCKET:-/tmp/simple-metrics.sock}"
 
 echo "Login password: ${PSK} (override by setting PSK before running this script)"
+if [[ -S $METRICS_SOCKET ]]; then
+  echo "Metrics page: using the simple-metrics at ${METRICS_SOCKET}"
+else
+  echo "Metrics page: nothing at ${METRICS_SOCKET} - start simple-metrics with run_local.sh (in its repo) to see data"
+fi
 echo "https://127.0.0.1:8443/ - browser will warn about the self-signed cert, that's expected"
 
 cd "$APP_DIR"

@@ -21,6 +21,7 @@ FETCH = REPO / "tools" / "fetch_simple_metrics.sh"
 SETUP = SCRIPTS / "setup_metrics.sh"
 TARGET = "aarch64-unknown-linux-musl"
 FAKE_BINARY = b"#!/bin/sh\necho 'simple-metrics 9.9.9'\n"
+FAKE_CLI = b"#!/bin/sh\necho 'smq 9.9.9'\n"
 
 
 # --------------------------------------------------------------------------
@@ -44,13 +45,18 @@ class Release:
     def archive_path(self) -> Path:
         return self.downloads / self.version / self.asset
 
-    def publish(self, binary: bytes) -> str:
-        """Writes the release archive and returns its SHA-256."""
+    def publish(self, binary: bytes, cli: bytes | None = FAKE_CLI) -> str:
+        """Writes the release archive (with an smq client unless `cli` is None,
+        like a release before 0.3.0) and returns its SHA-256."""
         buffer = io.BytesIO()
+        prefix = f"simple-metrics-{self.version}-{TARGET}"
         with tarfile.open(fileobj=buffer, mode="w:gz") as tar:
-            member = tarfile.TarInfo(f"simple-metrics-{self.version}-{TARGET}/simple-metrics")
-            member.size, member.mode = len(binary), 0o755
-            tar.addfile(member, io.BytesIO(binary))
+            for name, content in (("simple-metrics", binary), ("smq", cli)):
+                if content is None:
+                    continue
+                member = tarfile.TarInfo(f"{prefix}/{name}")
+                member.size, member.mode = len(content), 0o755
+                tar.addfile(member, io.BytesIO(content))
         data = buffer.getvalue()
         self.archive_path.write_bytes(data)
         return hashlib.sha256(data).hexdigest()
@@ -60,9 +66,9 @@ class Release:
             f"# a comment\nSIMPLE_METRICS_VERSION={version or self.version}\n"
             f"SIMPLE_METRICS_SHA256={sha256}\n")
 
-    def run(self, **env: str) -> subprocess.CompletedProcess:
+    def run(self, *args: str, **env: str) -> subprocess.CompletedProcess:
         return subprocess.run(
-            ["bash", str(FETCH)], capture_output=True, text=True, timeout=60,
+            ["bash", str(FETCH), *args], capture_output=True, text=True, timeout=60,
             env={
                 "PATH": os.environ["PATH"], "HOME": str(self.root),
                 "SIMPLE_METRICS_PIN_FILE": str(self.pin),
@@ -164,6 +170,48 @@ class TestFetchScript:
         assert r.stdout.strip() == str(binary)
         assert "WARNING" in r.stderr and "not the pinned release" in r.stderr
 
+    def test_cli_prints_the_path_of_the_verified_smq(self, release):
+        r = release.run("--cli")
+        assert r.returncode == 0, r.stderr
+        cli = Path(r.stdout.strip())
+        assert r.stdout.count("\n") == 1, "stdout is only the path"
+        assert cli == release.cache / "v9.9.9" / "smq"
+        assert cli.read_bytes() == FAKE_CLI
+        assert stat.S_IMODE(cli.stat().st_mode) == 0o755
+
+    def test_cli_is_checked_against_the_pin_like_the_binary(self, release):
+        release.publish(FAKE_BINARY, cli=b"#!/bin/sh\necho tampered\n")  # pin no longer matches
+        r = release.run("--cli")
+        assert r.returncode != 0 and "does not match the pinned checksum" in r.stderr
+        assert r.stdout == ""
+
+    def test_a_release_without_smq_prints_nothing_for_cli_but_still_gives_the_binary(self, release):
+        release.write_pin(release.publish(FAKE_BINARY, cli=None))
+        r = release.run("--cli")
+        assert r.returncode == 0, r.stderr
+        assert r.stdout == ""
+        assert release.run().stdout.strip() == str(release.cache / "v9.9.9" / "simple-metrics")
+
+    def test_a_stale_smq_from_an_earlier_release_is_not_reused(self, release):
+        assert release.run("--cli").stdout.strip() != ""
+        release.write_pin(release.publish(FAKE_BINARY, cli=None))
+        assert release.run("--cli").stdout == ""
+
+    def test_a_local_binary_uses_the_smq_beside_it_if_there_is_one(self, release, tmp_path):
+        build = tmp_path / "build"
+        build.mkdir()
+        (build / "simple-metrics").write_bytes(FAKE_BINARY)
+        (build / "simple-metrics").chmod(0o755)
+        env = {"SIMPLE_METRICS_BIN": str(build / "simple-metrics")}
+        assert release.run("--cli", **env).stdout == ""
+        (build / "smq").write_bytes(FAKE_CLI)
+        (build / "smq").chmod(0o755)
+        assert release.run("--cli", **env).stdout.strip() == str(build / "smq")
+
+    def test_an_unknown_option_is_refused(self, release):
+        r = release.run("--nope")
+        assert r.returncode == 2 and "usage" in r.stderr
+
     def test_a_local_binary_that_is_not_there_is_refused(self, release, tmp_path):
         r = release.run(SIMPLE_METRICS_BIN=str(tmp_path / "nope"))
         assert r.returncode != 0 and "not an executable file" in r.stderr
@@ -180,6 +228,8 @@ class TestPinFile:
         wga = (REPO / "wga").read_text()
         assert "tools/fetch_simple_metrics.sh" in wga
         assert "TF_VAR_simple_metrics_binary" in wga
+        assert "TF_VAR_simple_metrics_cli" in wga
+        assert "fetch_simple_metrics.sh\" --cli" in wga
 
 
 # --------------------------------------------------------------------------
@@ -285,6 +335,23 @@ class TestMainTf:
         assert "count      = local.metrics_enabled ? 1 : 0" in block
         assert "filesha256(var.simple_metrics_binary)" in block
         assert "setup_metrics.sh" in block
+
+    def test_smq_is_delivered_to_the_deploy_users_home_by_its_own_resource(self):
+        text = self.main_tf()
+        block = re.search(r'resource "terraform_data" "metrics_cli" \{(.*?)\n\}\n', text, re.S).group(1)
+        assert "count = local.cli_enabled ? 1 : 0" in block
+        assert "filesha256(var.simple_metrics_cli)" in block
+        assert 'destination = "${local.remote_dir}/smq"' in block
+        assert "remote_dir = \"/home/${var.pi_user}\"" in text
+        # Not part of what re-runs the access point's setup or the collector's.
+        for name in ("ap_deploy", "metrics_deploy"):
+            other = re.search(rf'resource "terraform_data" "{name}" \{{(.*?)\n\}}\n', text, re.S).group(1)
+            assert "simple_metrics_cli" not in other, name
+
+    def test_the_cli_variable_defaults_to_off(self):
+        variables = (REPO / "variables.tf").read_text()
+        block = re.search(r'variable "simple_metrics_cli" \{(.*?)\n\}\n', variables, re.S).group(1)
+        assert 'default     = ""' in block
 
     def test_the_variable_defaults_to_off_so_tofu_without_wga_still_works(self):
         variables = (REPO / "variables.tf").read_text()

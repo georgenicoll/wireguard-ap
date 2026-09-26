@@ -120,3 +120,9 @@ variable "simple_metrics_binary" {
   type        = string
   default     = ""
 }
+
+variable "simple_metrics_cli" {
+  description = "Path to the smq command-line client (aarch64, static) from the same simple-metrics release, to install in pi_user's home directory. Populated automatically by wga - not meant to be set by hand in tfvars. Empty skips it (a release before 0.3.0 has none, and tofu run without wga sets nothing)."
+  type        = string
+  default     = ""
+}

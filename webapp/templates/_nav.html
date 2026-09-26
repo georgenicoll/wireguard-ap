@@ -23,6 +23,12 @@
   <a href="/diagnostics" role="button" class="secondary">Diagnostics</a>
   {% endif %}
 
+  {% if request.url.path == "/metrics" %}
+  <a role="button" class="secondary disabled" aria-disabled="true">Metrics</a>
+  {% else %}
+  <a href="/metrics" role="button" class="secondary">Metrics</a>
+  {% endif %}
+
   {% if request.url.path == "/manage" %}
   <a role="button" class="secondary disabled" aria-disabled="true">Manage</a>
   {% else %}
