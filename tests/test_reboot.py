@@ -20,16 +20,24 @@ def latest_timestamp(pi) -> int:
 def test_restart_button_reboots_the_pi_and_everything_comes_back(pi, browser):
     before = pi.out("cat /proc/sys/kernel/random/boot_id").strip()
     assert before
-    # The metrics history must come back too. It is saved every minute, so a
-    # record from at least two minutes before the restart has to survive it:
-    # wait until the collector has one to remember.
+    # The metrics history must come back too. It's only flushed to disk
+    # every minute - simple-metrics doesn't force a flush on shutdown, by
+    # design (see its persist.rs) - so the marker needs to be safely older
+    # than that window. Bounded to records from this test run onwards
+    # (--from start_ms), not simple-metrics' whole retained history: an
+    # unbounded --points query downsamples across everything it's ever
+    # kept, which can land the marker on a bucket from long before this
+    # run - including a gap from a past test's own restart - and then
+    # assert on data that was never going to be there.
+    start_ms = latest_timestamp(pi) or int(time.time() * 1000)
     deadline = time.time() + 300
     marker = 0
     while time.time() < deadline:
-        newest = latest_timestamp(pi)
-        info = json.loads(pi.out("smq --json read --points 2 --metric load1") or "{}")
+        info = json.loads(
+            pi.out(f"smq --json read --from {start_ms} --metric load1") or "{}"
+        )
         stamps = info.get("timestamps") or []
-        if newest and stamps and newest - stamps[0] >= 150_000:
+        if stamps and stamps[-1] - stamps[0] >= 150_000:
             marker = stamps[0] + 10_000
             break
         time.sleep(10)
