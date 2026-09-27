@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>mnh-ap{% block title %}{% endblock %}</title>
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+  {% include "_pwa_head.html" %}
+  <link rel="stylesheet" href="/static/pico.min.css">
+  {% block extra_css %}{% endblock %}
+  <link rel="stylesheet" href="/static/site.css">
+  {% block head_scripts %}<script src="/static/htmx.min.js"></script>{% endblock %}
+</head>
+<body>
+  {% include "_header.html" %}
+  {% block nav %}{% include "_nav.html" %}{% endblock %}
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+  {% block after_main %}{% endblock %}
+</body>
+</html>

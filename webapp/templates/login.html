@@ -1,16 +1,8 @@
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>mnh-ap - Login</title>
-  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
-  <link rel="stylesheet" href="/static/pico.min.css">
-  <link rel="stylesheet" href="/static/site.css">
-</head>
-<body>
-  {% include "_header.html" %}
-  <main>
+{% extends "base.html" %}
+{% block title %} - Login{% endblock %}
+{% block nav %}{% endblock %}
+{% block head_scripts %}{% endblock %}
+{% block content %}
     <div class="login-grid">
       {% if error %}<p class="error">{{ error }}</p>{% endif %}
       <form method="post" action="/login" class="field-row login-form" id="login-form">
@@ -31,7 +23,8 @@
         <a role="button" class="secondary" onclick="document.getElementById('login-form').requestSubmit()">Login</a>
       </form>
     </div>
-  </main>
+{% endblock %}
+{% block after_main %}
   <script>
     // Flips the field between masked (type=password) and plain text, and the
     // icon between "eye" (click to show) and "eye with a slash" (click to hide).
@@ -47,5 +40,4 @@
       input.focus();
     }
   </script>
-</body>
-</html>
+{% endblock %}

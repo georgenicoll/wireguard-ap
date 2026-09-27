@@ -1,18 +1,6 @@
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>mnh-ap</title>
-  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
-  <link rel="stylesheet" href="/static/pico.min.css">
-  <link rel="stylesheet" href="/static/site.css">
-  <script src="/static/htmx.min.js"></script>
-</head>
-<body>
-  {% include "_header.html" %}
-  {% if show_logout %}{% include "_nav.html" %}{% endif %}
-  <main>
+{% extends "base.html" %}
+{% block nav %}{% if show_logout %}{% include "_nav.html" %}{% endif %}{% endblock %}
+{% block content %}
     <!-- Rough dump for now - just getting the data on the page, layout TBD. -->
     <div class="cards">
     <article>
@@ -45,6 +33,4 @@
       </div>
     </article>
     </div>
-  </main>
-</body>
-</html>
+{% endblock %}

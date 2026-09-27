@@ -23,7 +23,13 @@ import uuid
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import (
+    FileResponse,
+    HTMLResponse,
+    JSONResponse,
+    RedirectResponse,
+    StreamingResponse,
+)
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
@@ -359,6 +365,14 @@ app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 templates = Jinja2Templates(directory=BASE_DIR / "templates")
 
 
+@app.get("/sw.js")
+async def service_worker():
+    # Served at the root, not /static/sw.js, so its default scope covers
+    # the whole site - a scope restricted to /static/ wouldn't include the
+    # manifest's start_url ("/"), which breaks PWA installability.
+    return FileResponse(BASE_DIR / "static" / "sw.js", media_type="text/javascript")
+
+
 @app.middleware("http")
 async def log_request_timing(request: Request, call_next):
     # Outermost timing per request (registered before no_cache_static, so
@@ -384,7 +398,7 @@ async def no_cache_static(request: Request, call_next):
     # "no-cache" still revalidates via ETag rather than skipping the cache
     # entirely, so it stays cheap.
     response = await call_next(request)
-    if request.url.path.startswith("/static/"):
+    if request.url.path.startswith("/static/") or request.url.path == "/sw.js":
         response.headers["Cache-Control"] = "no-cache"
     return response
 

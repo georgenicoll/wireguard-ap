@@ -1,16 +1,8 @@
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>mnh-ap - Shutting down</title>
-  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
-  <link rel="stylesheet" href="/static/pico.min.css">
-  <link rel="stylesheet" href="/static/site.css">
-</head>
-<body>
-  {% include "_header.html" %}
-  <main>
+{% extends "base.html" %}
+{% block title %} - Shutting down{% endblock %}
+{% block nav %}{% endblock %}
+{% block head_scripts %}{% endblock %}
+{% block content %}
     {% if restarting %}
     <p>Restarting the Pi. Once it's back up, this page will take you
       back to the login page automatically.</p>
@@ -19,7 +11,8 @@
       back to the login page automatically.</p>
     {% endif %}
     <p><a role="button" class="secondary" href="/login">Go to login</a></p>
-  </main>
+{% endblock %}
+{% block after_main %}
   <script>
     // Waits out the Pi actually going down before the first check -
     // polling immediately would just catch this same still-running
@@ -42,5 +35,4 @@
 
     setTimeout(pollHealth, POLL_DELAY_MS);
   </script>
-</body>
-</html>
+{% endblock %}
