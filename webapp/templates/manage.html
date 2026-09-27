@@ -1,20 +1,11 @@
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>mnh-ap - Manage</title>
-  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
-  <link rel="stylesheet" href="/static/pico.min.css">
-  <link rel="stylesheet" href="/static/site.css">
-  <script src="/static/htmx.min.js"></script>
+{% extends "base.html" %}
+{% block title %} - Manage{% endblock %}
+{% block head_scripts %}
+  {{ super() }}
   <script src="/static/htmx-ext-sse.js"></script>
   <script src="/static/output-follow.js" defer></script>
-</head>
-<body>
-  {% include "_header.html" %}
-  {% include "_nav.html" %}
-  <main>
+{% endblock %}
+{% block content %}
     <div class="cards">
     <article>
       <header>Configure AP mode</header>
@@ -73,9 +64,29 @@
         </a>
       </p>
     </article>
-    </div>
-  </main>
 
+    <article>
+      <header>HTTPS certificate</header>
+      <p>This site's certificate is self-signed, so browsers warn about it.
+        Trusting it once removes that warning on this device.</p>
+      <p>On Android, tap the link below, then open the downloaded file (from
+        the notification, or your Files/Downloads app) and follow the
+        prompt into <strong>Settings &rarr; Security &rarr; Encryption &amp;
+        credentials &rarr; Install a certificate &rarr; CA certificate</strong>
+        (wording varies a bit by phone/Android version - look for "Encryption"
+        or "Credentials" under Security if it's not there exactly). It'll
+        show a strong warning about trusting a CA - that's standard for any
+        certificate install, not specific to this one.</p>
+      <p>On Windows/Linux/macOS the link just downloads the file, which you
+        then import into your OS or browser's certificate store.</p>
+      <p class="actions">
+        <a role="button" class="secondary"
+          href="http://{{ request.url.hostname }}/wireguard-ap.crt">Get the certificate</a>
+      </p>
+    </article>
+    </div>
+{% endblock %}
+{% block after_main %}
   <dialog id="output-dialog">
     <article>
       <header id="output-heading">Output</header>
@@ -130,5 +141,4 @@
       document.getElementById('output-dialog').showModal();
     }
   </script>
-</body>
-</html>
+{% endblock %}

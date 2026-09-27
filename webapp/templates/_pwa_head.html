@@ -1,0 +1,21 @@
+  <link rel="manifest" href="/static/manifest.json">
+  <meta name="theme-color" content="#6b8e4e">
+  <!-- iOS ignores the manifest for install - it needs its own icon and
+       meta tags to install as a standalone app via Share > Add to Home
+       Screen (there's no install prompt on iOS, unlike Chrome/Firefox). -->
+  <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="mnh-ap">
+  <script>
+    if ("serviceWorker" in navigator) {
+      // Logged rather than left as an unhandled rejection - e.g. the
+      // self-signed cert this app uses makes registration fail until it's
+      // trusted on the device, which isn't fatal, just means "not
+      // installable as a PWA yet". console.warn (not .error) so it
+      // doesn't get flagged as a page error by tools that treat those as
+      // failures (e.g. the Playwright UI tests' pageerror check).
+      window.addEventListener("load", () => navigator.serviceWorker.register("/sw.js")
+        .catch((err) => console.warn("Service worker registration failed:", err)));
+    }
+  </script>

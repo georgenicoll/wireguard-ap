@@ -54,14 +54,15 @@ login banner - see below) is fetched automatically the first time you run
   `setup_wireguard.sh`, `setup_forwarding_and_nat.sh`, `setup_ap.sh`,
   `uplink_wifi.sh`, `setup_webapp.sh`, `view_currently_associated_clients.sh`,
   `view_wireguard_status.sh`, `diagnostics_sudo.sh`, `shutdown_pi.sh`,
-  `setup_metrics.sh`), not root access in general. (Already set this up before
-  the metrics collector was added? Run the block again: it replaces the file,
-  and `./wga apply` needs `setup_metrics.sh` in it.)
+  `setup_metrics.sh`, `setup_cert_http.sh`), not root access in general.
+  (Already set this up before the metrics collector or the cert HTTP server
+  were added? Run the block again: it replaces the file, and `./wga apply`
+  needs `setup_metrics.sh`/`setup_cert_http.sh` in it.)
   ```bash
   PI_USER=changeme   # <-- OVERWRITE with your real pi_user before running this
 
   cat <<EOF | sudo tee "/etc/sudoers.d/010-${PI_USER}-wireguard-ap"
-  ${PI_USER} ALL=(root) NOPASSWD: /home/${PI_USER}/setup_host.sh, /home/${PI_USER}/setup_wireguard.sh, /home/${PI_USER}/setup_forwarding_and_nat.sh, NOPASSWD:SETENV: /home/${PI_USER}/setup_ap.sh, NOPASSWD: /home/${PI_USER}/uplink_wifi.sh, NOPASSWD: /home/${PI_USER}/setup_webapp.sh, NOPASSWD: /home/${PI_USER}/view_currently_associated_clients.sh, NOPASSWD: /home/${PI_USER}/view_wireguard_status.sh, NOPASSWD: /home/${PI_USER}/diagnostics_sudo.sh, NOPASSWD: /home/${PI_USER}/shutdown_pi.sh, NOPASSWD: /home/${PI_USER}/setup_metrics.sh
+  ${PI_USER} ALL=(root) NOPASSWD: /home/${PI_USER}/setup_host.sh, /home/${PI_USER}/setup_wireguard.sh, /home/${PI_USER}/setup_forwarding_and_nat.sh, NOPASSWD:SETENV: /home/${PI_USER}/setup_ap.sh, NOPASSWD: /home/${PI_USER}/uplink_wifi.sh, NOPASSWD: /home/${PI_USER}/setup_webapp.sh, NOPASSWD: /home/${PI_USER}/view_currently_associated_clients.sh, NOPASSWD: /home/${PI_USER}/view_wireguard_status.sh, NOPASSWD: /home/${PI_USER}/diagnostics_sudo.sh, NOPASSWD: /home/${PI_USER}/shutdown_pi.sh, NOPASSWD: /home/${PI_USER}/setup_metrics.sh, NOPASSWD: /home/${PI_USER}/setup_cert_http.sh
   EOF
   sudo chmod 0440 "/etc/sudoers.d/010-${PI_USER}-wireguard-ap"
   sudo visudo -c   # validates syntax - a bad sudoers file can lock out sudo entirely
@@ -158,7 +159,7 @@ changing behaviour) and re-apply — see
 | `main.tf` | One `terraform_data` resource: opens an SSH connection, uploads the scripts, the `webapp/` app and a rendered env file, then runs the host, WireGuard, forwarding, AP and web UI setup scripts. |
 | `templates/wireguard-ap.env.tftpl` | Renders your config into a `KEY='value'` file the scripts `source` on the Pi, instead of having their settings hardcoded. |
 | `templates/motd.tftpl` + `ascii/monkeynuthead.txt` + `templates/AP.txt` | Combined into `~/.wireguard-ap-motd` and printed by a snippet appended to `pi_user`'s own `~/.bashrc` on every interactive login: the shared "monkey / nut / head" banner (from the [ascii](https://github.com/georgenicoll/ascii) submodule), "AP" underneath it in the same style but kept local to this repo since it's project-specific, then a summary of the available scripts plus the current SSID and subnet. Per-user rather than system-wide (`/etc/motd`), and needs no root at all. |
-| `scripts/*.sh` | The Pi-side scripts, uploaded byte-for-byte (not passed through `templatefile()`, since they use bash `${VAR}` inside heredocs that would collide with OpenTofu's own templating). `setup_host.sh` (packages, stock services, Wi-Fi country, radio unblock - the one-time-ish setup that used to be inline `sudo` commands in `main.tf`), `setup_wireguard.sh`, `setup_ap.sh`, `setup_forwarding_and_nat.sh`, `uplink_wifi.sh`, `setup_webapp.sh`, `view_currently_associated_clients.sh` and `view_wireguard_status.sh` all self-elevate with `sudo` internally (`[[ $EUID -eq 0 ]] \|\| exec sudo "$SCRIPT" "$@"`) rather than being invoked with `sudo` at the call site, so sudoers can be scoped to exactly these script paths - see step 2 above. The latter two are also run non-interactively by the web UI (see below), which is the other reason they self-elevate the whole script rather than sudo-prefixing individual commands: no TTY means no password prompt, so every sudo call needs its own NOPASSWD coverage otherwise. |
+| `scripts/*.sh` | The Pi-side scripts, uploaded byte-for-byte (not passed through `templatefile()`, since they use bash `${VAR}` inside heredocs that would collide with OpenTofu's own templating). `setup_host.sh` (packages, stock services, Wi-Fi country, radio unblock - the one-time-ish setup that used to be inline `sudo` commands in `main.tf`), `setup_wireguard.sh`, `setup_ap.sh`, `setup_forwarding_and_nat.sh`, `uplink_wifi.sh`, `setup_webapp.sh`, `setup_cert_http.sh`, `view_currently_associated_clients.sh` and `view_wireguard_status.sh` all self-elevate with `sudo` internally (`[[ $EUID -eq 0 ]] \|\| exec sudo "$SCRIPT" "$@"`) rather than being invoked with `sudo` at the call site, so sudoers can be scoped to exactly these script paths - see step 2 above. The latter two are also run non-interactively by the web UI (see below), which is the other reason they self-elevate the whole script rather than sudo-prefixing individual commands: no TTY means no password prompt, so every sudo call needs its own NOPASSWD coverage otherwise. |
 | `webapp/` | A small FastAPI + [htmx](https://htmx.org) web UI (`app.py`, `templates/`, `static/`), uploaded as-is and run by `setup_webapp.sh` via [uv](https://docs.astral.sh/uv/) - see "Web UI" below. |
 | `variables.tf` / `outputs.tf` / `versions.tf` | The input/output contract and provider requirement (`hashicorp/null` only — no cloud provider). |
 | `simple-metrics.pin` + `tools/fetch_simple_metrics.sh` | Which release of the [simple-metrics](https://github.com/georgenicoll/simple-metrics) collector to deploy, and the checksum of its archive. `wga` runs the fetch script, which downloads that release on your machine, checks it against the pinned checksum, and hands the path to `tofu` - see "Metrics collector". |
@@ -514,7 +515,33 @@ https://<pi_host>/       # or https://<ap_ip>/ once joined to the AP - also link
   with `openssl` the first time it runs (left alone on
   later runs, so redeploys don't force the browser to re-trust it). There's
   no real hostname to get a CA-signed cert for, so your browser will warn
-  once - expected for a device like this, not a bug.
+  once - expected for a device like this, not a bug. The certificate's SAN
+  covers `IP:<ap_ip>`, `DNS:wireguard-ap` and `DNS:wireguard-ap.local` -
+  `setup_ap.sh`'s dnsmasq config resolves both names to the AP's IP for
+  anything connected to it
+  (`host-record=wireguard-ap,wireguard-ap.local,<ap_ip>`), so
+  `https://wireguard-ap/` works without a hostname mismatch on top of the
+  self-signed warning. The `.local` form exists mainly for apps (e.g. a
+  VPN's split-tunnel exclusion list) that want a name to match against -
+  note ".local" is reserved for mDNS (RFC 6762), so a resolver that tries
+  mDNS before its configured DNS server could still miss it on some
+  clients.
+- **Trusting the certificate**: `setup_cert_http.sh` runs
+  `mnh-ap-cert-http.service`, a tiny standalone server (stdlib
+  `http.server`, no framework) that answers exactly one path -
+  `http://<ap_ip>/wireguard-ap.crt` (or `http://wireguard-ap/...` from the
+  AP) - with the same certificate in DER form and the
+  `application/x-x509-ca-cert` MIME type, which is what makes Android's
+  Chrome hand a downloaded file to the OS's own certificate installer.
+  Deliberately plain HTTP, not the web UI's HTTPS: fetching the cert is
+  exactly what you'd need to do to make the HTTPS site trusted in the first
+  place, so serving it there would be the same chicken-and-egg problem.
+  Only the public certificate is exposed this way - never `key.pem`. Runs
+  as its own unprivileged user (`mnh-cert`, distinct from `mnh-web`) with
+  the full systemd hardening set (unlike the web app's service, it shells
+  out to nothing, so nothing needs relaxing - see `setup_cert_http.sh`),
+  and binds port 80 via `CAP_NET_BIND_SERVICE` the same way the web app
+  binds 443.
 - **Login-gated**: every page except `/login` requires a password, checked
   against the AP's own Wi-Fi password (`PSK`) - one shared secret rather
   than a separate site password to remember. A signed session cookie

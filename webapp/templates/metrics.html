@@ -1,21 +1,14 @@
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>mnh-ap - Metrics</title>
-  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
-  <link rel="stylesheet" href="/static/pico.min.css">
+{% extends "base.html" %}
+{% block title %} - Metrics{% endblock %}
+{% block extra_css %}
   <link rel="stylesheet" href="/static/uPlot.min.css">
-  <link rel="stylesheet" href="/static/site.css">
-  <script src="/static/htmx.min.js"></script>
+{% endblock %}
+{% block head_scripts %}
+  {{ super() }}
   <script src="/static/uPlot.iife.min.js"></script>
   <script src="/static/metrics.js" defer></script>
-</head>
-<body>
-  {% include "_header.html" %}
-  {% include "_nav.html" %}
-  <main>
+{% endblock %}
+{% block content %}
     {% if error %}
     <article>
       <header>No metrics available</header>
@@ -47,6 +40,4 @@
     <div id="chart" class="chart" role="img" aria-label="Chart of the selected metric over time"></div>
     <p id="chart-status" class="chart-status" aria-live="polite">Loading...</p>
     {% endif %}
-  </main>
-</body>
-</html>
+{% endblock %}

@@ -1,18 +1,6 @@
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>mnh-ap - {{ heading }}</title>
-  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
-  <link rel="stylesheet" href="/static/pico.min.css">
-  <link rel="stylesheet" href="/static/site.css">
-  <script src="/static/htmx.min.js"></script>
-</head>
-<body>
-  {% include "_header.html" %}
-  {% include "_nav.html" %}
-  <main>
+{% extends "base.html" %}
+{% block title %} - {{ heading }}{% endblock %}
+{% block content %}
     <article>
       <header>{{ heading }}</header>
       <pre id="script-output" class="output">{{ output }}</pre>
@@ -24,6 +12,4 @@
          hx-disabled-elt="this"
          class="secondary">Refresh</a>
     </article>
-  </main>
-</body>
-</html>
+{% endblock %}

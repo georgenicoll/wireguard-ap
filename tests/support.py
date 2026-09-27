@@ -136,8 +136,8 @@ def free_port() -> int:
 def expected_units(pi: PiConfig) -> list[str]:
     hostapd = ["mnh-hostapd@wlan0", "mnh-hostapd@wlan1"] if pi.mode == "dual" \
         else ["mnh-hostapd@wlan1"]
-    return ["mnh-ap-webapp", "mnh-ap-metrics", "mnh-ap-nat", "mnh-ap-local-routing",
-            "mnh-ap-wg-watchdog.timer",
+    return ["mnh-ap-webapp", "mnh-ap-metrics", "mnh-ap-cert-http", "mnh-ap-nat",
+            "mnh-ap-local-routing", "mnh-ap-wg-watchdog.timer",
             "wg-quick@wg0", "dnsmasq", "NetworkManager", *hostapd]
 
 
@@ -154,6 +154,8 @@ def pi_health_problems(pi: PiConfig) -> list[str]:
         problems.append("routing-protection rules (fwmark) are missing")
     if ":443 " not in pi.out("ss -ltn"):
         problems.append("nothing is listening on 443")
+    if ":80 " not in pi.out("ss -ltn"):
+        problems.append("nothing is listening on 80")
     if not pi.out("ps -o user= -C python").split() or "mnh-web" not in pi.out("ps -o user= -C python"):
         problems.append("the web app is not running as mnh-web")
     return problems

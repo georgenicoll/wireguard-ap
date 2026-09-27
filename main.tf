@@ -13,6 +13,8 @@ locals {
     "diagnostics_lib.sh",
     "setup_webapp.sh",
     "shutdown_pi.sh",
+    "setup_cert_http.sh",
+    "cert_http_server.py",
   ]
 
   # The metrics collector's own deploy (see terraform_data.metrics_deploy).
@@ -197,6 +199,16 @@ resource "terraform_data" "ap_deploy" {
   }
 
   provisioner "file" {
+    source      = "${path.module}/scripts/setup_cert_http.sh"
+    destination = "${local.remote_dir}/setup_cert_http.sh"
+  }
+
+  provisioner "file" {
+    source      = "${path.module}/scripts/cert_http_server.py"
+    destination = "${local.remote_dir}/cert_http_server.py"
+  }
+
+  provisioner "file" {
     # No trailing slash on source: uploads the webapp/ folder itself (SCP
     # creates it) into destination - the parent dir, which does need to
     # already exist. A trailing slash ("contents only") needs the
@@ -252,6 +264,9 @@ resource "terraform_data" "ap_deploy" {
       "if [ -s ${local.remote_dir}/.wg0.conf ]; then ${local.remote_dir}/setup_wireguard.sh; else rm -f ${local.remote_dir}/.wg0.conf; fi",
       "${local.remote_dir}/setup_ap.sh ${var.mode} ${var.uplink_band}",
       "${local.remote_dir}/setup_webapp.sh",
+      # After setup_webapp.sh: needs cert.pem, which that script generates
+      # (or reuses) first.
+      "${local.remote_dir}/setup_cert_http.sh",
     ]
   }
 

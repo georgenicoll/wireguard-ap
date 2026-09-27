@@ -127,6 +127,12 @@ EOF
 
 # --- dnsmasq on the bridge ---------------------------------------------------
 # Clients get the AP as DNS; dnsmasq forwards to /etc/resolv.conf (eth0's servers first).
+# host-record gives connected clients a friendly name for the webapp
+# (https://wireguard-ap) instead of having to remember/type the AP's IP.
+# wireguard-ap.local is the same record, for apps (e.g. split-tunnel VPN
+# exclusion lists) that want a name to match against - note ".local" is
+# reserved for mDNS (RFC 6762), so a resolver that tries mDNS before its
+# configured DNS server could still miss this on some clients.
 rm -f /etc/dnsmasq.d/mnh-ap.conf
 cat >/etc/dnsmasq.d/mnh-ap.conf <<EOF
 interface=${BR}
@@ -134,6 +140,7 @@ bind-dynamic
 dhcp-authoritative
 dhcp-range=${DHCP_START},${DHCP_END},${AP_NETMASK},${LEASE}
 dhcp-option=option:router,${AP_IP}
+host-record=wireguard-ap,wireguard-ap.local,${AP_IP}
 strict-order
 EOF
 

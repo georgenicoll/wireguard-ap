@@ -68,7 +68,8 @@ if [[ ! -f $CERT || ! -f $KEY ]]; then
   else
     openssl req -x509 -newkey rsa:2048 -nodes \
       -keyout "$KEY" -out "$CERT" -days 3650 \
-      -subj "/CN=${AP_IP}" -addext "subjectAltName=IP:${AP_IP}"
+      -subj "/O=MonkeyNutHead AP/CN=${AP_IP}" \
+      -addext "subjectAltName=IP:${AP_IP},DNS:wireguard-ap,DNS:wireguard-ap.local"
     chown "$WEB_USER:$WEB_USER" "$CERT" "$KEY"
     chmod 0644 "$CERT"
     chmod 0600 "$KEY"
