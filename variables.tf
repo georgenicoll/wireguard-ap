@@ -126,3 +126,9 @@ variable "simple_metrics_cli" {
   type        = string
   default     = ""
 }
+
+variable "simple_metrics_web" {
+  description = "Path to smweb (aarch64, static), the web server for the Metrics page, from the same simple-metrics release, to install on the Pi as a second service beside the collector. Populated automatically by wga - not meant to be set by hand in tfvars. Empty skips it (a release before 0.5.0 has none, and tofu run without wga sets nothing), and the Metrics page then says it has nothing to show."
+  type        = string
+  default     = ""
+}

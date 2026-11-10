@@ -136,7 +136,7 @@ def free_port() -> int:
 def expected_units(pi: PiConfig) -> list[str]:
     hostapd = ["mnh-hostapd@wlan0", "mnh-hostapd@wlan1"] if pi.mode == "dual" \
         else ["mnh-hostapd@wlan1"]
-    return ["mnh-ap-webapp", "mnh-ap-metrics", "mnh-ap-cert-http", "mnh-ap-nat",
+    return ["mnh-ap-webapp", "mnh-ap-metrics", "mnh-ap-metrics-web", "mnh-ap-cert-http", "mnh-ap-nat",
             "mnh-ap-local-routing", "mnh-ap-wg-watchdog.timer",
             "wg-quick@wg0", "dnsmasq", "NetworkManager", *hostapd]
 

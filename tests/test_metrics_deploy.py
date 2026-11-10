@@ -22,6 +22,7 @@ SETUP = SCRIPTS / "setup_metrics.sh"
 TARGET = "aarch64-unknown-linux-musl"
 FAKE_BINARY = b"#!/bin/sh\necho 'simple-metrics 9.9.9'\n"
 FAKE_CLI = b"#!/bin/sh\necho 'smq 9.9.9'\n"
+FAKE_WEB = b"#!/bin/sh\necho 'smweb 9.9.9'\n"
 
 
 # --------------------------------------------------------------------------
@@ -45,13 +46,15 @@ class Release:
     def archive_path(self) -> Path:
         return self.downloads / self.version / self.asset
 
-    def publish(self, binary: bytes, cli: bytes | None = FAKE_CLI) -> str:
+    def publish(self, binary: bytes, cli: bytes | None = FAKE_CLI,
+                web: bytes | None = FAKE_WEB) -> str:
         """Writes the release archive (with an smq client unless `cli` is None,
-        like a release before 0.3.0) and returns its SHA-256."""
+        like a release before 0.3.0, and an smweb unless `web` is None, like
+        one before 0.5.0) and returns its SHA-256."""
         buffer = io.BytesIO()
         prefix = f"simple-metrics-{self.version}-{TARGET}"
         with tarfile.open(fileobj=buffer, mode="w:gz") as tar:
-            for name, content in (("simple-metrics", binary), ("smq", cli)):
+            for name, content in (("simple-metrics", binary), ("smq", cli), ("smweb", web)):
                 if content is None:
                     continue
                 member = tarfile.TarInfo(f"{prefix}/{name}")
@@ -208,6 +211,45 @@ class TestFetchScript:
         (build / "smq").chmod(0o755)
         assert release.run("--cli", **env).stdout.strip() == str(build / "smq")
 
+    def test_web_prints_the_path_of_the_verified_smweb(self, release):
+        r = release.run("--web")
+        assert r.returncode == 0, r.stderr
+        web = Path(r.stdout.strip())
+        assert r.stdout.count("\n") == 1, "stdout is only the path"
+        assert web == release.cache / "v9.9.9" / "smweb"
+        assert web.read_bytes() == FAKE_WEB
+        assert stat.S_IMODE(web.stat().st_mode) == 0o755
+
+    def test_web_is_checked_against_the_pin_like_the_rest(self, release):
+        release.publish(FAKE_BINARY, web=b"#!/bin/sh\necho tampered\n")  # pin no longer matches
+        r = release.run("--web")
+        assert r.returncode != 0 and "does not match the pinned checksum" in r.stderr
+        assert r.stdout == ""
+
+    def test_a_release_without_smweb_prints_nothing_for_web_but_still_deploys_the_rest(self, release):
+        release.write_pin(release.publish(FAKE_BINARY, web=None))
+        r = release.run("--web")
+        assert r.returncode == 0, r.stderr
+        assert r.stdout == ""
+        assert release.run().stdout.strip() == str(release.cache / "v9.9.9" / "simple-metrics")
+        assert release.run("--cli").stdout.strip() == str(release.cache / "v9.9.9" / "smq")
+
+    def test_a_stale_smweb_from_an_earlier_release_is_not_reused(self, release):
+        assert release.run("--web").stdout.strip() != ""
+        release.write_pin(release.publish(FAKE_BINARY, web=None))
+        assert release.run("--web").stdout == ""
+
+    def test_a_local_binary_uses_the_smweb_beside_it_if_there_is_one(self, release, tmp_path):
+        build = tmp_path / "build"
+        build.mkdir()
+        for name in ("simple-metrics", "smweb"):
+            (build / name).write_bytes(b"#!/bin/sh\n")
+            (build / name).chmod(0o755)
+        r = release.run("--web", SIMPLE_METRICS_BIN=str(build / "simple-metrics"))
+        assert r.returncode == 0 and r.stdout.strip() == str(build / "smweb")
+        (build / "smweb").unlink()
+        assert release.run("--web", SIMPLE_METRICS_BIN=str(build / "simple-metrics")).stdout == ""
+
     def test_an_unknown_option_is_refused(self, release):
         r = release.run("--nope")
         assert r.returncode == 2 and "usage" in r.stderr
@@ -230,6 +272,13 @@ class TestPinFile:
         assert "TF_VAR_simple_metrics_binary" in wga
         assert "TF_VAR_simple_metrics_cli" in wga
         assert "fetch_simple_metrics.sh\" --cli" in wga
+        assert "TF_VAR_simple_metrics_web" in wga
+        assert "fetch_simple_metrics.sh\" --web" in wga
+
+    def test_the_pinned_release_is_one_that_has_smweb(self):
+        version = re.search(r"^SIMPLE_METRICS_VERSION=v(\d+)\.(\d+)\.(\d+)$",
+                            (REPO / "simple-metrics.pin").read_text(), re.M)
+        assert tuple(map(int, version.groups())) >= (0, 5, 0), "smweb came in 0.5.0"
 
 
 # --------------------------------------------------------------------------
@@ -378,6 +427,103 @@ class TestSetupMetricsScript:
 
 
 # --------------------------------------------------------------------------
+# setup_metrics.sh: smweb, the web server the Metrics page is built from
+# --------------------------------------------------------------------------
+def print_web_unit(tmp_path: Path) -> str:
+    shutil.copy(SETUP, tmp_path / "setup_metrics.sh")
+    (tmp_path / "wireguard-ap.env").write_text("PI_USER='george'\nIF_24='wlan0'\nIF_5='wlan1'\nBR='br-ap'\n")
+    r = subprocess.run([str(tmp_path / "setup_metrics.sh"), "--print-web-unit"],
+                       capture_output=True, text=True, timeout=30)
+    assert r.returncode == 0, r.stderr
+    return r.stdout
+
+
+def directive(unit: str, name: str) -> str:
+    return re.search(rf"^{name}=(.*)$", unit, re.M).group(1)
+
+
+@pytest.mark.local
+class TestSmwebService:
+    """smweb has no login and no network listener: a Unix socket the web app
+    can reach and nothing else can, and nothing it could do harm with."""
+
+    def test_it_runs_as_the_collectors_user_in_the_web_apps_group(self, tmp_path):
+        unit = print_web_unit(tmp_path)
+        assert directive(unit, "User") == "mnh-metrics" and directive(unit, "Group") == "mnh-web"
+
+    def test_it_listens_on_a_unix_socket_only(self, tmp_path):
+        exec_start = directive(print_web_unit(tmp_path), "ExecStart")
+        assert "--unix /run/simple-metrics-web/smweb.sock" in exec_start
+        assert "--http" not in exec_start, "no TCP listener at all"
+        unit = print_web_unit(tmp_path)
+        assert directive(unit, "RestrictAddressFamilies") == "AF_UNIX"
+        assert directive(unit, "IPAddressDeny") == "any"
+
+    def test_the_socket_is_closed_to_everyone_but_the_web_apps_group(self, tmp_path):
+        unit = print_web_unit(tmp_path)
+        assert directive(unit, "RuntimeDirectoryMode") == "0750"
+        assert directive(unit, "UMask") == "0007"
+        assert "--unix-mode 660" in directive(unit, "ExecStart")
+
+    def test_its_runtime_directory_is_not_the_collectors(self, tmp_path):
+        """systemd removes a service's runtime directory when it stops, so a
+        shared one would take the other service's socket away on every restart."""
+        web = directive(print_web_unit(tmp_path), "RuntimeDirectory")
+        collector = directive(print_unit(tmp_path).stdout, "RuntimeDirectory")
+        assert web != collector
+
+    def test_it_reads_the_collector_where_the_collector_listens(self, tmp_path):
+        web = directive(print_web_unit(tmp_path), "ExecStart")
+        collector = directive(print_unit(tmp_path).stdout, "ExecStart")
+        socket = re.search(r"--socket (\S+)", collector).group(1)
+        assert f"--socket {socket}" in web
+
+    def test_it_starts_after_the_collector_without_depending_on_it_to_stay_up(self, tmp_path):
+        unit = print_web_unit(tmp_path)
+        assert directive(unit, "After") == "mnh-ap-metrics.service"
+        assert directive(unit, "Wants") == "mnh-ap-metrics.service"
+        assert "Requires=" not in unit and "BindsTo=" not in unit, "a collector restart must not stop the page"
+
+    def test_the_web_app_and_the_unit_agree_where_the_socket_is_and_where_it_is_mounted(self, tmp_path):
+        app = (REPO / "webapp" / "app.py").read_text()
+        default = re.search(r'METRICS_WEB_SOCKET = os\.environ\.get\("METRICS_WEB_SOCKET", "([^"]+)"\)', app).group(1)
+        exec_start = directive(print_web_unit(tmp_path), "ExecStart")
+        assert f"--unix {default}" in exec_start
+        mount = re.search(r"--base-path (\S+)", exec_start).group(1)
+        for route in (f'"{mount}"', f'"{mount}/data"', f'"{mount}/assets/{{name}}"'):
+            assert f"@app.get({route}," in app, f"{route} is not a route of the web app"
+
+    @pytest.mark.parametrize("directive_line", [
+        "NoNewPrivileges=yes", "CapabilityBoundingSet=", "ProtectSystem=strict", "ProtectHome=yes",
+        "PrivateTmp=yes", "PrivateDevices=yes", "MemoryDenyWriteExecute=yes",
+        "SystemCallFilter=@system-service", "MemoryMax=64M", "Restart=on-failure",
+        "ProtectProc=invisible", "ProcSubset=pid", "RestrictNamespaces=yes",
+    ])
+    def test_the_unit_is_locked_down(self, tmp_path, directive_line):
+        assert f"\n{directive_line}\n" in print_web_unit(tmp_path)
+
+    @pytest.mark.skipif(not shutil.which("systemd-analyze"), reason="systemd-analyze not installed")
+    def test_systemd_accepts_the_unit(self, tmp_path):
+        unit = tmp_path / "mnh-ap-metrics-web.service"
+        unit.write_text(print_web_unit(tmp_path))
+        r = subprocess.run(["systemd-analyze", "verify", str(unit)], capture_output=True, text=True)
+        problems = [l for l in (r.stdout + r.stderr).splitlines()
+                    if l.strip() and "is not executable" not in l]
+        assert problems == []
+
+    def test_the_script_installs_it_only_after_checking_it_runs_and_removes_it_if_a_release_has_none(self):
+        text = SETUP.read_text()
+        assert '"${WEB_BINARY}.new" --version' in text
+        assert text.index('"${WEB_BINARY}.new" --version') < text.index('mv -f "${WEB_BINARY}.new" "$WEB_BINARY"')
+        assert 'systemctl disable --now "${WEB_SERVICE}.service"' in text
+        assert 'rm -f "$WEB_BINARY"' in text
+
+    def test_the_script_waits_for_the_socket_and_says_so_if_it_never_appears(self):
+        text = SETUP.read_text()
+        assert "smweb did not create $WEB_SOCKET" in text
+
+
+# --------------------------------------------------------------------------
 # main.tf: the collector must not drag the access point's setup along
 # --------------------------------------------------------------------------
 @pytest.mark.local
@@ -422,8 +568,27 @@ class TestMainTf:
             block = re.search(rf'resource "terraform_data" "{name}" \{{(.*?)\n\}}\n', text, re.S).group(1)
             assert "triggers_replace = local.metrics_triggers" in block, name
         triggers = re.search(r"metrics_triggers = (.*?)\n  \} : \{\}", text, re.S).group(1)
-        for wanted in ("simple_metrics_binary", "simple_metrics_cli", "setup_metrics.sh", "local.env_file"):
+        for wanted in ("simple_metrics_binary", "simple_metrics_cli", "simple_metrics_web",
+                       "setup_metrics.sh", "local.env_file"):
             assert wanted in triggers, wanted
+
+    def test_smweb_is_delivered_to_the_deploy_users_home_by_its_own_resource(self):
+        text = self.main_tf()
+        block = re.search(r'resource "terraform_data" "metrics_web" \{(.*?)\n\}\n', text, re.S).group(1)
+        assert "count = local.web_enabled ? 1 : 0" in block
+        assert 'destination = "${local.remote_dir}/smweb"' in block
+        assert "triggers_replace = local.metrics_triggers" in block
+        deploy = re.search(r'resource "terraform_data" "metrics_deploy" \{(.*?)\n\}\n', text, re.S).group(1)
+        assert "terraform_data.metrics_web" in re.search(r"depends_on = \[(.*?)\]", deploy).group(1)
+        assert "filesha256(var.simple_metrics_web)" in text  # in local.metrics_triggers
+        assert "rm -f ${local.remote_dir}/smweb" in deploy, "a release without it must not leave an old one to install"
+        ap = re.search(r'resource "terraform_data" "ap_deploy" \{(.*?)\n\}\n', text, re.S).group(1)
+        assert "simple_metrics_web" not in ap and "smweb" not in ap
+
+    def test_the_web_variable_defaults_to_off(self):
+        variables = (REPO / "variables.tf").read_text()
+        block = re.search(r'variable "simple_metrics_web" \{(.*?)\n\}\n', variables, re.S).group(1)
+        assert 'default     = ""' in block
 
     def test_the_cli_variable_defaults_to_off(self):
         variables = (REPO / "variables.tf").read_text()

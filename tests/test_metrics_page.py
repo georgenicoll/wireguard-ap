@@ -1,6 +1,10 @@
-"""The Metrics page and its data endpoint, against the local web app talking
-to a fake collector (support.FakeCollector) - so what the web app asks the
-collector for can be checked exactly. Tier: local.
+"""The Metrics page, its data endpoint and its assets, against the local web
+app talking to the real smweb (the pinned release where this machine can run
+it), which reads a fake collector (support.FakeCollector) - so what is asked of
+the collector can be checked exactly. Tier: local.
+
+smweb writes the chart and answers for its data; the web app's part is the
+login, the page around the chart, and passing smweb's answers on.
 """
 import re
 import time
@@ -21,7 +25,8 @@ def web(local_server) -> Web:
 
 @pytest.mark.local
 class TestMetricsPage:
-    @pytest.mark.parametrize("path", ["/metrics", "/metrics/data?metric=cpu_percent&range=1h"])
+    @pytest.mark.parametrize("path", ["/metrics", "/metrics/data?metric=cpu_percent&range=1h",
+                                      "/metrics/assets/metrics.js"])
     def test_it_needs_a_login(self, local_server, path):
         r = Web(local_server.base_url, LOCAL_PSK).get(path)
         assert r.status_code == 303 and r.headers["location"] == "/login"
@@ -44,10 +49,18 @@ class TestMetricsPage:
             assert f'<option value="{r}"' in text
         assert '<option value="1h" selected>' in text
 
-    def test_the_page_loads_the_vendored_chart_library_not_a_cdn(self, web, collector):
+    def test_the_page_loads_the_chart_library_from_the_pi_not_a_cdn(self, web, collector):
         text = web.get("/metrics").text
-        assert "/static/uPlot.iife.min.js" in text and "/static/metrics.js" in text
+        assert "/metrics/assets/uPlot.iife.min.js" in text and "/metrics/assets/metrics.js" in text
+        assert "/metrics/assets/uPlot.min.css" in text
+        assert 'data-url="/metrics/data"' in text, "where the chart fetches its data from"
         assert "http://" not in text and "https://" not in text
+
+    def test_it_is_the_sites_own_page_around_smwebs_chart(self, web, collector):
+        text = web.get("/metrics").text
+        assert text.count("<html") == 1 and "<title>mnh-ap - Metrics</title>" in text
+        assert "<nav>" in text and 'id="chart"' in text, "the site's nav, smweb's chart"
+        assert "htmx.min.js" in text, "every page with the nav needs htmx for Log out to work"
 
     def test_the_nav_links_to_it_and_marks_it_current(self, web, collector):
         text = web.get("/metrics").text
@@ -58,7 +71,8 @@ class TestMetricsPage:
         collector.mode = "down"
         r = web.get("/metrics")
         assert r.status_code == 200
-        assert "No metrics available" in r.text and "mnh-ap-metrics" in r.text
+        assert "No metrics available" in r.text and "The metrics collector" in r.text
+        assert "simple-metrics service" in r.text
         assert "metric-select" not in r.text
 
     def test_a_refusing_collector_gives_the_same_page(self, web, collector):
@@ -146,3 +160,80 @@ class TestMetricsData:
         assert self.get(web).status_code == 503
         collector.mode = "ok"
         assert self.get(web).status_code == 200
+
+
+@pytest.mark.local
+class TestMetricsAssets:
+    """The chart's script, styles and library, which smweb carries and the web
+    app passes on behind the login."""
+
+    @pytest.mark.parametrize("name, kind", [
+        ("metrics.js", "javascript"), ("uPlot.iife.min.js", "javascript"),
+        ("metrics.css", "css"), ("uPlot.min.css", "css"),
+    ])
+    def test_they_are_served_with_their_type_and_can_be_cached(self, web, name, kind):
+        r = web.get(f"/metrics/assets/{name}?v=1")
+        assert r.status_code == 200
+        assert kind in r.headers["content-type"]
+        assert "max-age" in r.headers["cache-control"], "a versioned URL: safe to keep"
+        assert len(r.content) > 500
+
+    def test_the_chart_code_reads_where_to_fetch_from_the_page(self, web):
+        assert "dataset.url" in web.get("/metrics/assets/metrics.js").text
+
+    @pytest.mark.parametrize("name", ["nope.js", "metrics.js.map", "page.css.bak", ".", ".hidden"])
+    def test_an_asset_that_is_not_there_is_a_404(self, web, name):
+        assert web.get(f"/metrics/assets/{name}").status_code == 404
+
+    @pytest.mark.parametrize("name", ["..%2F..%2Fetc%2Fpasswd", "%2e%2e%2f%2e%2e%2fetc%2fpasswd",
+                                      "a%20b", "x%0d%0aHost:%20evil", "a" * 65, "%C3%A9", "a%00b"])
+    def test_an_odd_name_is_refused_before_it_goes_anywhere(self, web, name):
+        r = web.get(f"/metrics/assets/{name}")
+        assert r.status_code in (404, 422), f"{name!r}: {r.status_code}"
+        assert "root:" not in r.text
+
+
+@pytest.mark.local
+class TestMetricsWebService:
+    """smweb itself being down - not the collector, which smweb reports on."""
+
+    def test_the_page_says_which_services_to_check(self, web, smweb_service):
+        smweb_service.stop()
+        r = web.get("/metrics")
+        assert r.status_code == 200, "a helpful page, not an error"
+        assert "No metrics available" in r.text
+        assert "mnh-ap-metrics-web" in r.text and "mnh-ap-metrics" in r.text
+        assert "metric-select" not in r.text and "<nav>" in r.text
+
+    @pytest.mark.parametrize("path", ["/metrics/data?metric=cpu_percent&range=1h",
+                                      "/metrics/assets/metrics.js"])
+    def test_its_other_routes_are_a_503_with_a_readable_message(self, web, smweb_service, path):
+        smweb_service.stop()
+        r = web.get(path)
+        assert r.status_code == 503
+        assert r.json()["error"].endswith(".") and "web service" in r.json()["error"]
+        assert r.headers["cache-control"] == "no-store"
+
+    def test_a_service_that_comes_back_is_used_again(self, web, smweb_service, collector):
+        smweb_service.stop()
+        assert web.get("/metrics/data?metric=cpu_percent").status_code == 503
+        smweb_service.start()
+        assert web.get("/metrics/data?metric=cpu_percent").status_code == 200
+        assert 'id="chart"' in web.get("/metrics").text
+
+
+@pytest.mark.local
+class TestWhatReachesSmweb:
+    """The web app builds smweb's request itself, from two query values."""
+
+    @pytest.mark.parametrize("bad", ["x%0d%0aX-Evil:%201", "a%20HTTP/1.1%0d%0a%0d%0aGET%20/", "%00", "a+b"])
+    def test_nothing_in_the_query_can_add_to_the_request(self, web, collector, bad):
+        r = web.get(f"/metrics/data?metric={bad}&range=1h")
+        assert r.status_code == 400
+        assert collector.requests == []
+
+    def test_other_parameters_are_dropped(self, web, collector):
+        r = web.get("/metrics/data?metric=cpu_percent&range=1h&op=shutdown&from=0")
+        assert r.status_code == 200
+        reads = [q for q in collector.requests if q["op"] == "read"]
+        assert len(reads) == 1 and reads[0]["from"] > 1_000_000_000_000, "its own range, not the one asked for"

@@ -35,10 +35,19 @@
 # swap the file and gain the group). The group is only the ability to
 # connect to this one socket.
 #
-#   setup_metrics.sh --print-unit     prints the systemd unit it would install
-#   setup_metrics.sh --print-sudoers  ... the sudoers rule for smq
-#   setup_metrics.sh --print-wrapper  ... the /usr/local/bin/smq wrapper
-#                                     Each exits without needing root: for tests.
+# It also installs smweb, the web server for the Metrics page, if one was
+# uploaded (as ./smweb; releases before 0.5.0 have none), as a second
+# service, mnh-ap-metrics-web. It reads the collector's socket and serves
+# the chart (the page's markup, script, styles and data) on a Unix socket of
+# its own, which only the web app can reach; the web app puts it inside its
+# own, login-protected, Metrics page. smweb has no login and no network
+# listener of its own: the socket is all there is.
+#
+#   setup_metrics.sh --print-unit      prints the systemd unit it would install
+#   setup_metrics.sh --print-web-unit  ... the unit for smweb
+#   setup_metrics.sh --print-sudoers   ... the sudoers rule for smq
+#   setup_metrics.sh --print-wrapper   ... the /usr/local/bin/smq wrapper
+#                                      Each exits without needing root: for tests.
 set -euo pipefail
 
 SCRIPT="$(readlink -f "$0")"
@@ -46,6 +55,7 @@ SCRIPT_DIR="$(dirname "$SCRIPT")"
 ENV_FILE="${SCRIPT_DIR}/wireguard-ap.env"
 BINARY_SRC="${SCRIPT_DIR}/simple-metrics"
 CLI_SRC="${SCRIPT_DIR}/smq"     # optional: releases before 0.3.0 have none
+WEB_SRC="${SCRIPT_DIR}/smweb"   # optional: releases before 0.5.0 have none
 [[ -f $ENV_FILE ]] || { echo "missing env file: $ENV_FILE" >&2; exit 1; }
 # shellcheck source=/dev/null
 source "$ENV_FILE"
@@ -59,6 +69,13 @@ BINARY="/usr/local/bin/simple-metrics"
 CLI="/usr/local/libexec/smq"
 CLI_WRAPPER="/usr/local/bin/smq"
 CLI_SUDOERS="/etc/sudoers.d/030-${PI_USER}-smq"
+WEB_SERVICE="mnh-ap-metrics-web"
+WEB_BINARY="/usr/local/bin/smweb"
+WEB_SOCKET_DIR_NAME="simple-metrics-web"            # /run/<this>, made by systemd
+WEB_SOCKET="/run/${WEB_SOCKET_DIR_NAME}/smweb.sock"
+# Where the web app mounts it: smweb writes its links to match, and the app
+# serves /metrics, /metrics/data and /metrics/assets/* from it.
+WEB_BASE_PATH="/metrics"
 SOCKET_DIR_NAME="simple-metrics"                    # /run/<this>, made by systemd
 SOCKET="/run/${SOCKET_DIR_NAME}/simple-metrics.sock"
 STATE_DIR_NAME="simple-metrics"                     # /var/lib/<this>, made by systemd
@@ -159,6 +176,69 @@ WantedBy=multi-user.target
 EOF
 }
 
+# smweb's unit. It runs as the collector's user and in the web app's group,
+# so it can use the collector's socket (see above) and the web app can use
+# its. Everything it needs is a Unix socket: no network at all.
+# Its socket lives in a directory of its own, not the collector's: systemd
+# removes a service's runtime directory when that service stops, which would
+# take the other service's socket with it whenever one of them restarted.
+render_web_unit() {
+  cat <<EOF
+[Unit]
+Description=simple-metrics web page (smweb) for mnh-ap
+Documentation=https://github.com/georgenicoll/simple-metrics
+After=${SERVICE}.service
+Wants=${SERVICE}.service
+
+[Service]
+Type=simple
+User=${METRICS_USER}
+Group=${WEB_GROUP}
+# /run/${WEB_SOCKET_DIR_NAME}: owned by the user and group above and closed to
+# everyone else, so only the web app (in that group) can reach the socket.
+RuntimeDirectory=${WEB_SOCKET_DIR_NAME}
+RuntimeDirectoryMode=0750
+UMask=0007
+ExecStart=${WEB_BINARY} --socket ${SOCKET} --unix ${WEB_SOCKET} --unix-mode 660 --base-path ${WEB_BASE_PATH} --title mnh-ap
+Restart=on-failure
+RestartSec=5
+
+# A page and a few JSON replies: far less than the collector.
+MemoryMax=64M
+TasksMax=64
+
+# Hardening. It talks to two Unix sockets and reads nothing else: no network,
+# no files, no devices, no privileges.
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+RestrictAddressFamilies=AF_UNIX
+IPAddressDeny=any
+RemoveIPC=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+
+[Install]
+WantedBy=multi-user.target
+EOF
+}
+
 [[ $PI_USER =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] || { echo "bad PI_USER: '$PI_USER'" >&2; exit 1; }
 
 render_sudoers() {
@@ -179,6 +259,7 @@ EOF
 
 case "${1:-}" in
   --print-unit) render_unit; exit 0 ;;
+  --print-web-unit) render_web_unit; exit 0 ;;
   --print-sudoers) render_sudoers; exit 0 ;;
   --print-wrapper) render_wrapper; exit 0 ;;
 esac
@@ -229,6 +310,23 @@ else
   rm -f "$CLI" "$CLI_WRAPPER" "$CLI_SUDOERS"
 fi
 
+# smweb, if this release has one. Installed the same careful way: checked
+# to run here before it replaces the current one, and moved into place in
+# one step. Without one (an older release), any earlier install is removed.
+if [[ -f $WEB_SRC ]]; then
+  install -o root -g root -m 0755 "$WEB_SRC" "${WEB_BINARY}.new"
+  if ! "${WEB_BINARY}.new" --version >/dev/null; then
+    rm -f "${WEB_BINARY}.new"
+    echo "the uploaded smweb does not run on this machine" >&2
+    exit 1
+  fi
+  mv -f "${WEB_BINARY}.new" "$WEB_BINARY"
+  render_web_unit >"/etc/systemd/system/${WEB_SERVICE}.service"
+else
+  systemctl disable --now "${WEB_SERVICE}.service" 2>/dev/null || true
+  rm -f "$WEB_BINARY" "/etc/systemd/system/${WEB_SERVICE}.service"
+fi
+
 render_unit >"/etc/systemd/system/${SERVICE}.service"
 systemctl daemon-reload
 systemctl enable "${SERVICE}.service"
@@ -246,3 +344,20 @@ if [[ ! -S $SOCKET ]]; then
   exit 1
 fi
 echo "$("$BINARY" --version) is running, listening on $SOCKET"
+
+# Started after the collector, which it reads from (its socket must exist
+# first, though smweb copes with a collector that isn't there yet).
+if [[ -f $WEB_SRC ]]; then
+  systemctl enable "${WEB_SERVICE}.service"
+  systemctl restart "${WEB_SERVICE}.service"
+  for _ in $(seq 1 20); do
+    [[ -S $WEB_SOCKET ]] && break
+    sleep 0.5
+  done
+  if [[ ! -S $WEB_SOCKET ]]; then
+    echo "smweb did not create $WEB_SOCKET:" >&2
+    journalctl -u "${WEB_SERVICE}.service" -n 20 --no-pager >&2 || true
+    exit 1
+  fi
+  echo "$("$WEB_BINARY" --version) is running, listening on $WEB_SOCKET"
+fi

@@ -25,10 +25,13 @@ locals {
   metrics_enabled = var.simple_metrics_binary != ""
   # smq, the collector's command-line client, goes to the deploy user's home.
   cli_enabled = local.metrics_enabled && var.simple_metrics_cli != ""
+  # smweb, the web server for the Metrics page, goes there too.
+  web_enabled = local.metrics_enabled && var.simple_metrics_web != ""
   # What makes the collector's deploy re-run (shared with metrics_cli).
   metrics_triggers = local.metrics_enabled ? {
     binary = filesha256(var.simple_metrics_binary)
     cli    = local.cli_enabled ? filesha256(var.simple_metrics_cli) : ""
+    web    = local.web_enabled ? filesha256(var.simple_metrics_web) : ""
     script = filesha256("${path.module}/scripts/setup_metrics.sh")
     # setup_metrics.sh reads the interface names from this.
     env_file = sha256(local.env_file)
@@ -286,8 +289,9 @@ resource "terraform_data" "ap_deploy" {
 # this: `depends_on` orders them, only `triggers_replace` decides re-runs.
 resource "terraform_data" "metrics_deploy" {
   count = local.metrics_enabled ? 1 : 0
-  # metrics_cli first, so ~/smq is in place for setup_metrics.sh to install.
-  depends_on = [terraform_data.ap_deploy, terraform_data.metrics_cli]
+  # metrics_cli and metrics_web first, so ~/smq and ~/smweb are in place for
+  # setup_metrics.sh to install.
+  depends_on = [terraform_data.ap_deploy, terraform_data.metrics_cli, terraform_data.metrics_web]
 
   triggers_replace = local.metrics_triggers
 
@@ -320,6 +324,8 @@ resource "terraform_data" "metrics_deploy" {
       "chmod 755 ${local.remote_dir}/setup_metrics.sh ${local.remote_dir}/simple-metrics",
       # No smq in this release: don't let an earlier release's copy be installed.
       local.cli_enabled ? "true" : "rm -f ${local.remote_dir}/smq",
+      # Likewise for smweb (a release before 0.5.0).
+      local.web_enabled ? "true" : "rm -f ${local.remote_dir}/smweb",
       # Self-elevates with sudo, so needs setup_metrics.sh in the deploy
       # user's sudoers entry - see README's sudoers section.
       "${local.remote_dir}/setup_metrics.sh",
@@ -357,5 +363,37 @@ resource "terraform_data" "metrics_cli" {
   provisioner "remote-exec" {
     # Uploading over an existing file keeps its old mode.
     inline = ["chmod 755 ${local.remote_dir}/smq"]
+  }
+}
+
+# smweb, the web server for the Metrics page, in the deploy user's home
+# directory (~/smweb), where metrics_deploy's setup_metrics.sh picks it up and
+# installs the root-owned copy that the mnh-ap-metrics-web service runs. The
+# web app (inside its own login) proxies to that service's socket.
+resource "terraform_data" "metrics_web" {
+  count = local.web_enabled ? 1 : 0
+
+  # The same triggers as metrics_deploy, so whenever setup_metrics.sh re-runs
+  # ~/smweb is uploaded again first: it installs from there, and finding it
+  # missing would remove the installed service.
+  triggers_replace = local.metrics_triggers
+
+  connection {
+    type        = "ssh"
+    host        = var.pi_host
+    user        = var.pi_user
+    private_key = var.ssh_private_key_path != "" ? file(var.ssh_private_key_path) : null
+    agent       = var.ssh_private_key_path == ""
+    timeout     = "20s"
+  }
+
+  provisioner "file" {
+    source      = var.simple_metrics_web
+    destination = "${local.remote_dir}/smweb"
+  }
+
+  provisioner "remote-exec" {
+    # Uploading over an existing file keeps its old mode.
+    inline = ["chmod 755 ${local.remote_dir}/smweb"]
   }
 }

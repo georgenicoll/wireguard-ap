@@ -1,5 +1,6 @@
 """Fixtures for the integration tests (see integration.py for the tiers)."""
 import os
+import platform
 import shutil
 import signal
 import subprocess
@@ -59,6 +60,85 @@ def fake_collector():
     shutil.rmtree(directory, ignore_errors=True)
 
 
+
+@pytest.fixture(scope="session")
+def smweb_binary() -> Path:
+    """smweb, the web server for the Metrics page, for the local web app to
+    talk to. In order of preference: SMWEB_BIN; the release pinned in
+    simple-metrics.pin - the very binary that gets deployed - where this
+    machine can run the Pi's (static, aarch64) build; or one built from a
+    simple-metrics checkout beside this repository."""
+    explicit = os.environ.get("SMWEB_BIN")
+    if explicit:
+        if not os.access(explicit, os.X_OK):
+            pytest.fail(f"SMWEB_BIN={explicit} is not an executable file")
+        return Path(explicit)
+    if platform.machine() in ("aarch64", "arm64") and (REPO / "simple-metrics.pin").exists():
+        fetched = subprocess.run([str(REPO / "tools" / "fetch_simple_metrics.sh"), "--web"],
+                                 capture_output=True, text=True, timeout=300)
+        if fetched.returncode == 0 and fetched.stdout.strip():
+            return Path(fetched.stdout.strip())
+    sibling = REPO.parent / "simple-metrics"
+    if (sibling / "Cargo.toml").exists() and shutil.which("cargo"):
+        built = subprocess.run(["cargo", "build", "--quiet", "--bin", "smweb"], cwd=sibling,
+                               capture_output=True, text=True, timeout=900)
+        if built.returncode != 0:
+            pytest.fail(f"building smweb in {sibling} failed:\n{built.stderr[-2000:]}")
+        return sibling / "target" / "debug" / "smweb"
+    pytest.fail("the local tier needs smweb (the web server for the Metrics page): set SMWEB_BIN "
+                "to one, or check out github.com/georgenicoll/simple-metrics beside this "
+                "repository (with cargo installed), or run on an aarch64 machine, which can "
+                "use the pinned release")
+
+
+class SmwebProcess:
+    """The real smweb, reading the fake collector and serving a Unix socket,
+    which can be stopped and started to see how the web app copes."""
+
+    def __init__(self, binary: Path, collector_socket: Path, socket: Path):
+        self.binary, self.collector_socket, self.socket = binary, collector_socket, socket
+        self.proc: subprocess.Popen | None = None
+
+    def start(self) -> None:
+        if self.proc and self.proc.poll() is None:
+            return
+        self.socket.unlink(missing_ok=True)
+        # Mounted at /metrics, as the deployed service is (setup_metrics.sh).
+        self.proc = subprocess.Popen(
+            [str(self.binary), "--socket", str(self.collector_socket), "--unix", str(self.socket),
+             "--unix-mode", "600", "--base-path", "/metrics", "--title", "mnh-ap"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        deadline = time.time() + 15
+        while not self.socket.exists():
+            if self.proc.poll() is not None or time.time() > deadline:
+                pytest.fail("smweb did not start")
+            time.sleep(0.05)
+
+    def stop(self) -> None:
+        if self.proc and self.proc.poll() is None:
+            self.proc.terminate()
+            self.proc.wait(timeout=10)
+        self.proc = None
+        self.socket.unlink(missing_ok=True)
+
+
+@pytest.fixture(scope="session")
+def smweb(fake_collector, smweb_binary):
+    directory = Path(tempfile.mkdtemp(prefix="wga-sw-"))
+    process = SmwebProcess(smweb_binary, fake_collector.path, directory / "smweb.sock")
+    process.start()
+    yield process
+    process.stop()
+    shutil.rmtree(directory, ignore_errors=True)
+
+
+@pytest.fixture
+def smweb_service(smweb):
+    """smweb, running again before and after each test (a test may stop it)."""
+    smweb.start()
+    yield smweb
+    smweb.start()
+
 @pytest.fixture
 def collector(fake_collector):
     """The fake collector, put back to normal before and after each test."""
@@ -68,7 +148,7 @@ def collector(fake_collector):
 
 
 @pytest.fixture(scope="session")
-def local_server(fake_collector):
+def local_server(fake_collector, smweb):
     if not shutil.which("uv") or not shutil.which("openssl"):
         pytest.fail("the local tier needs uv and openssl on PATH")
     tmp = Path(tempfile.mkdtemp(prefix="wga-it-"))
@@ -84,7 +164,7 @@ def local_server(fake_collector):
         "PSK": LOCAL_PSK, "WEBAPP_HOST": "127.0.0.1", "WEBAPP_PORT": str(port),
         "WEBAPP_CERT": str(tmp / "c.pem"), "WEBAPP_KEY": str(tmp / "k.pem"),
         "PYTHONDONTWRITEBYTECODE": "1",
-        "METRICS_SOCKET": str(fake_collector.path),
+        "METRICS_WEB_SOCKET": str(smweb.socket),
     }
     log = open(tmp / "server.log", "w")
     # Own process group, so teardown stops exactly what this started.

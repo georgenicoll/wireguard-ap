@@ -10,6 +10,8 @@ from support import REPO
 
 SOCKET = "/run/simple-metrics/simple-metrics.sock"
 SERVICE = "mnh-ap-metrics.service"
+WEB_SOCKET = "/run/simple-metrics-web/smweb.sock"
+WEB_SERVICE = "mnh-ap-metrics-web.service"
 
 
 def pinned_version() -> str:
@@ -128,6 +130,68 @@ class TestPiMetrics:
         assert r.returncode != 0
 
 
+def has_smweb() -> bool:
+    return tuple(int(n) for n in pinned_version().split(".")) >= (0, 5, 0)
+
+
+@pytest.mark.smoke
+class TestPiMetricsWeb:
+    """smweb, which writes the Metrics page's chart: running unprivileged, with
+    a Unix socket the web app can reach and nothing else can, and no network
+    listener of its own."""
+
+    @pytest.fixture(autouse=True)
+    def _needs_smweb(self):
+        if not has_smweb():
+            pytest.skip("the pinned release predates smweb")
+
+    def test_the_service_is_enabled_and_running(self, pi):
+        assert pi.out(f"systemctl is-enabled {WEB_SERVICE}").strip() == "enabled"
+        assert pi.out(f"systemctl is-active {WEB_SERVICE}").strip() == "active"
+
+    def test_it_runs_as_the_collectors_user_not_root_and_not_the_web_user(self, pi):
+        assert pi.out("ps -o user= -C smweb").split() == ["mnh-metrics"]
+
+    def test_it_is_the_pinned_release_and_root_owned(self, pi):
+        assert pi.out("/usr/local/bin/smweb --version").strip() == f"smweb {pinned_version()}"
+        assert pi.out("stat -c '%a %U %G' /usr/local/bin/smweb").strip() == "755 root root"
+
+    def test_its_socket_is_closed_to_everyone_but_the_owner_and_web_group(self, pi):
+        got = pi.out("stat -c '%a %U %G' /run/simple-metrics-web").strip()
+        assert got == "750 mnh-metrics mnh-web", got
+        assert WEB_SOCKET in pi.out("ss -xlH")
+
+    def test_other_accounts_cannot_connect(self, pi):
+        assert pi.out("id -Gn").split().count("mnh-web") == 0
+        r = pi.ssh(f"python3 -c \"import socket; s = socket.socket(socket.AF_UNIX); s.connect('{WEB_SOCKET}')\"")
+        assert r.returncode != 0 and "Permission denied" in r.stderr, r.stderr
+
+    def test_it_has_no_network_listener(self, pi):
+        listening = pi.out("ss -ltnp 2>/dev/null || true")
+        assert "smweb" not in listening, "it should only be reachable through its socket"
+
+    def test_it_is_locked_down(self, pi):
+        props = dict(line.split("=", 1) for line in
+                     pi.out(f"systemctl show {WEB_SERVICE} -p NoNewPrivileges -p ProtectSystem "
+                            "-p CapabilityBoundingSet -p RestrictAddressFamilies "
+                            "-p MemoryDenyWriteExecute -p PrivateDevices -p ProtectProc").splitlines() if "=" in line)
+        assert props["NoNewPrivileges"] == "yes" and props["ProtectSystem"] == "strict"
+        assert props["CapabilityBoundingSet"] == "" and props["PrivateDevices"] == "yes"
+        assert props["MemoryDenyWriteExecute"] == "yes" and props["RestrictAddressFamilies"] == "AF_UNIX"
+        assert props["ProtectProc"] == "invisible"
+
+    def test_it_started_cleanly_and_says_where_it_listens(self, pi):
+        log = pi.out(f"journalctl -u {WEB_SERVICE} -b --no-pager -o cat")
+        assert f"on {WEB_SOCKET}" in log, log
+
+    def test_restarting_the_collector_does_not_take_its_socket_away(self, pi):
+        """Separate runtime directories: systemd removes a service's when it
+        stops. (Checked by looking at the units, not by restarting anything.)"""
+        web = pi.out(f"systemctl show {WEB_SERVICE} -p RuntimeDirectory --value").strip()
+        collector = pi.out(f"systemctl show {SERVICE} -p RuntimeDirectory --value").strip()
+        assert web and collector and web != collector
+
+
 def metric_names(html: str) -> list[str]:
     select = re.search(r'<select id="metric-select".*?</select>', html, re.S).group(0)
     return re.findall(r'<option value="([^"]+)"', select)
@@ -173,3 +237,22 @@ class TestPiMetricsPage:
         assert pi_web.get("/metrics/data?metric=nope&range=1h").status_code == 404
         assert pi_web.get("/metrics/data?metric=cpu_percent&range=1y").status_code == 400
         assert pi_web.get("/metrics/data?metric=../etc&range=1h").status_code == 400
+
+    def test_the_chart_is_served_from_the_pi_through_the_web_app(self, pi_web):
+        if not has_smweb():
+            pytest.skip("the pinned release predates smweb")
+        page = pi_web.get("/metrics").text
+        assert "/metrics/assets/metrics.js" in page and "/metrics/assets/uPlot.iife.min.js" in page
+        assert 'data-url="/metrics/data"' in page
+        assert "http://" not in page and "https://" not in page, "nothing from the internet"
+        for name, kind in (("metrics.js", "javascript"), ("uPlot.iife.min.js", "javascript"),
+                           ("metrics.css", "css"), ("uPlot.min.css", "css")):
+            r = pi_web.get(f"/metrics/assets/{name}")
+            assert r.status_code == 200 and kind in r.headers["content-type"], name
+
+    def test_the_assets_need_a_login_too(self, pi):
+        if not has_smweb():
+            pytest.skip("the pinned release predates smweb")
+        from support import Web
+        r = Web(pi.base_url, "not-the-passkey").get("/metrics/assets/metrics.js")
+        assert r.status_code in (303, 401) or r.url.path == "/login"
