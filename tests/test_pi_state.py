@@ -32,6 +32,30 @@ class TestPiState:
         assert "fwmark 0x1 lookup 101" in rules and "fwmark 0x2 lookup 102" in rules
         assert "wg0" in pi.out("ip -br link")
 
+    def test_the_reply_routing_tables_are_not_empty(self, pi):
+        """The rules above can be there with nothing behind them: the tables'
+        routes go when an interface is reconfigured, and replies to anything
+        arriving on eth0 then fall through to wg0 (SSH and the web app, from
+        the network the Pi is on, time out while everything else looks fine)."""
+        if " UP " not in pi.out("ip -br link show eth0 2>&1 || true"):
+            pytest.skip("eth0 is down: its table is meant to be empty then")
+        table = pi.out("ip route show table 101").strip()
+        gateway = pi.out("ip route show default dev eth0 | awk '{print $3; exit}'").strip()
+        want = f"default via {gateway} dev eth0" if gateway else "default dev eth0 scope link"
+        assert table == want, f"table 101 is {table!r}, expected {want!r}"
+        assert "dev " in pi.out("ip route show table 102"), "the AP bridge's table is empty"
+
+    def test_replies_to_connections_arriving_on_eth0_leave_through_eth0(self, pi):
+        if " UP " not in pi.out("ip -br link show eth0 2>&1 || true"):
+            pytest.skip("eth0 is down")
+        for destination in ("1.1.1.1", "10.0.0.1"):
+            route = pi.out(f"ip route get {destination} mark 0x1 | head -1")
+            assert "dev eth0" in route, f"a reply to {destination} would go: {route.strip()}"
+
+    def test_the_network_event_hook_that_refills_them_is_installed(self, pi):
+        mode = pi.out("stat -c '%a %U' /etc/NetworkManager/dispatcher.d/91-mnh-ap-local-routing").strip()
+        assert mode == "755 root"
+
     def test_state_directory_is_private_to_the_web_user(self, pi):
         assert pi.out("stat -c '%a %U:%G' /var/lib/mnh-ap").strip() == "700 mnh-web:mnh-web"
         # ...and the deploy user genuinely can't see inside it.

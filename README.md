@@ -163,7 +163,7 @@ changing behaviour) and re-apply — see
 | `webapp/` | A small FastAPI + [htmx](https://htmx.org) web UI (`app.py`, `templates/`, `static/`), uploaded as-is and run by `setup_webapp.sh` via [uv](https://docs.astral.sh/uv/) - see "Web UI" below. |
 | `variables.tf` / `outputs.tf` / `versions.tf` | The input/output contract and provider requirement (`hashicorp/null` only — no cloud provider). |
 | `simple-metrics.pin` + `tools/fetch_simple_metrics.sh` | Which release of the [simple-metrics](https://github.com/georgenicoll/simple-metrics) collector to deploy, and the checksum of its archive. `wga` runs the fetch script, which downloads that release on your machine, checks it against the pinned checksum, and hands the path to `tofu` - see "Metrics collector". |
-| `scripts/setup_metrics.sh` | Installs the collector's binary, creates its user, and writes and starts its systemd unit. Run by `main.tf`'s separate `metrics_deploy` resource. |
+| `scripts/setup_metrics.sh` | Installs the collector's binary and `smweb` (the chart's web server), creates their user, and writes and starts their two systemd units. Run by `main.tf`'s separate `metrics_deploy` resource. |
 | `wga` | Thin wrapper around `tofu`, same idea as wireguard-router's `wgr` - also fetches the WireGuard client config named by `wireguard_client_name` via wireguard-router's own `scripts/wg-peer.sh`. |
 
 Config is kept deliberately minimal: most of the Pi-side network settings
@@ -240,7 +240,8 @@ the relevant units by hand (`mnh-hostapd@*`, `dnsmasq`, `mnh-ap-nat`,
 `mnh-ap-local-routing`, `mnh-ap-wg-watchdog.timer`, `mnh-ap-webapp`), and
 remove
 `/etc/NetworkManager/dispatcher.d/90-mnh-ap-wg-route-precedence` if you also
-want the `wg0` route-precedence fix gone, or ask for a destroy-time
+want the `wg0` route-precedence fix gone (and `91-mnh-ap-local-routing` for the
+reply-routing hook), or ask for a destroy-time
 provisioner to be added if you want `destroy` to do that automatically.
 
 ## What gets configured on the Pi
@@ -295,7 +296,20 @@ provisioner to be added if you want `destroy` to do that automatically.
     `/usr/local/sbin/mnh-ap-local-routing.sh`), keyed on arrival interface
     rather than on any peer's registered subnet, so it protects management
     access generically against any current or future peer collision without
-    needing to know about peer LANs at all.
+    needing to know about peer LANs at all. The script gives each interface a
+    routing table (101 for `eth0`, 102 for the AP bridge) holding a default
+    route via that interface's gateway, and **is re-run on every network
+    event** by the NetworkManager hook
+    `/etc/NetworkManager/dispatcher.d/91-mnh-ap-local-routing`, because those
+    routes go when an interface is reconfigured (a link flap, a new DHCP lease
+    on another network, moving the Pi to another port or VLAN) while the rules
+    pointing at the tables stay. Run only once at boot, it left the table
+    empty after the Pi was moved: replies to the network it was now on fell
+    through to `wg0` and SSH and the web app from there timed out, with
+    everything else looking healthy. `./wga test` checks that the tables are
+    filled and that a marked reply to `1.1.1.1` and to `10.0.0.1` leaves via
+    `eth0`; `tests/test_local_routing.py` checks the script and hook in a
+    throwaway network namespace, including the link-flap case.
   - **Everything else** - AP clients' own traffic, and any new connection the
     Pi itself initiates - deliberately prefers `wg0`:
     `mnh-ap-wg-route-precedence.sh` (run after `wg-quick up` and on every
@@ -347,7 +361,7 @@ in `~/.cache/wireguard-ap/simple-metrics`, and re-checked on every run.
 `simple-metrics-<version>-aarch64-unknown-linux-musl.tar.gz` (from the
 `SHA256SUMS` on the release's GitHub page) into `simple-metrics.pin`, then
 `./wga apply`. **Trying a local build instead:** `SIMPLE_METRICS_BIN=/path/to/simple-metrics ./wga apply`
-uses that binary without any check (and says so).
+uses that binary without any check (and says so), and the `smq` and `smweb` beside it.
 
 **What runs on the Pi.** `setup_metrics.sh` installs the binary to
 `/usr/local/bin/simple-metrics` (root-owned, so nothing that runs as a service
@@ -405,11 +419,30 @@ directly it works for any socket you *can* reach, e.g. `--socket`.) Releases
 before 0.3.0 have no `smq`, and are deployed without it; a later deploy
 without it removes the installed files and the rule.
 
+**The chart: `smweb`.** The Metrics page's chart - its pickers, its script and
+styles, the charting library (uPlot) and the JSON it draws from - is not part of
+this web app. It comes from `smweb`, a second small program in the same release
+(0.5.0 and later), which reads the collector and serves the chart. `setup_metrics.sh`
+installs it to `/usr/local/bin/smweb` (root-owned) and runs it as
+`mnh-ap-metrics-web.service`, with the same user and the same lock-down as the
+collector. It has **no login and no network listener**: it serves a Unix socket,
+`/run/simple-metrics-web/smweb.sock`, in a directory only `mnh-metrics` and the web
+app's group can enter, so the web app is the only thing that can reach it. (It
+has a directory of its own because systemd removes a service's runtime directory
+when it stops, which would take the collector's socket with it on a restart.)
+The web app is the login: `/metrics` puts smweb's chart inside the site's own
+page, and `/metrics/data` and `/metrics/assets/*` pass smweb's answers on, behind
+the login. smweb is told it is mounted at `/metrics`, so the links in the chart it
+writes point at those routes. A release without `smweb` is deployed without it, and
+the Metrics page says it has nothing to show.
+
 **Running the collector locally.** In the simple-metrics repo, `./run_local.sh`
 builds it and runs it in the foreground on `/tmp/simple-metrics.sock`, and
 `smq --local latest` queries it. `./dev_webapp.sh` points the web UI at that
-socket (`METRICS_SOCKET`, to use another), so the Metrics page shows this
-machine's own figures while you work on it.
+socket (`METRICS_SOCKET`, to use another) through an `smweb` it starts for you
+(`SMWEB_BIN`, or a build in a simple-metrics checkout beside this repository: `cargo
+build --bin smweb`), so the Metrics page shows this machine's own figures while
+you work on it.
 
 ## Web UI
 
@@ -454,16 +487,19 @@ baked into the initial HTML, plus links to two status pages:
   source.
 - **`/metrics`** — a chart of one metric at a time (CPU, load, memory, swap,
   temperature, and each interface's receive/transmit rate) over the last 1h,
-  6h, 24h or 7d, refreshed every 5 seconds while the tab is visible. It reads
-  the collector's socket (see "Metrics collector"; `METRICS_SOCKET` overrides
-  the path) through `/metrics/data?metric=<name>&range=<1h|6h|24h|7d>`, which
-  validates both, asks the collector for at most 600 points (each the mean of
-  its time bucket, with the min and max, drawn as a line and a shaded band, so
-  a short spike still shows on a week-long chart) and returns them as JSON.
-  A gap - the collector was down, or a value couldn't be measured - is a
-  break in the line. If the collector can't be reached the page says so
-  rather than failing. It needs collector v0.2.0 or later (time ranges,
-  subsets, downsampling).
+  6h, 24h or 7d, refreshed every 5 seconds while the tab is visible. The chart is
+  `smweb`'s (see "Metrics collector"), reached over its socket
+  (`METRICS_WEB_SOCKET` overrides the path): `/metrics` wraps it in the site's own
+  page, and `/metrics/data?metric=<name>&range=<1h|6h|24h|7d>` and
+  `/metrics/assets/<name>` are passed straight through, after the login. The
+  query is rebuilt from just those two values (re-encoded, so nothing in it can
+  add to the request), and smweb validates both, asks the collector for at most
+  600 points (each the mean of its time bucket, with the min and max, drawn as
+  a line and a shaded band, so a short spike still shows on a week-long chart)
+  and returns them as JSON. A gap - the collector was down, or a value couldn't
+  be measured - is a break in the line. If the collector (or smweb) can't be
+  reached the page says so, and which services to check, rather than failing.
+  It needs a release with `smweb` (0.5.0 or later).
 - **`/manage`** — runs `setup_ap.sh`/`uplink_wifi.sh` with parameters chosen
   in the browser (mode, band, upstream SSID/password) and streams their
   output live rather than just showing a final result, using htmx's
@@ -601,9 +637,10 @@ https://<pi_host>/       # or https://<ap_ip>/ once joined to the AP - also link
   initially) specifically because the SSE extension needs htmx's classic
   `defineExtension` API, which v4 replaced with `registerExtension` -
   confirmed by grepping the vendored file rather than assuming.
-- **uPlot is vendored** too (`webapp/static/uPlot.iife.min.js`,
-  `uPlot.min.css`, 1.6.32, MIT - its licence is `uPlot.LICENSE` beside them),
-  for the same no-internet reason. The chart code is `static/metrics.js`.
+- **uPlot is not vendored here any more.** The chart library, and the chart code
+  that uses it, are built into `smweb`'s binary (MIT; its licence is in the
+  simple-metrics repository), so they come from the Pi with no internet needed -
+  served from `/metrics/assets/`, behind the login.
 - `uv`'s own package cache means only the *first* run on a given Pi needs
   internet access to resolve `app.py`'s dependencies - later re-runs (e.g.
   after a reboot, or a redeploy that doesn't touch the dependency block)
@@ -645,7 +682,16 @@ real browser, and you may not want that on every apply.
 
 `tests/integration.py` is the [uv](https://docs.astral.sh/uv/) script that
 runs them (its `pytest`, `httpx` and `playwright` dependencies are declared
-inline, like `app.py`'s), so there's nothing to install. The tests themselves
+inline, like `app.py`'s), so there's nothing to install - apart from one thing
+for the `local` tier: the Metrics page is smweb's chart (see "Metrics
+collector"), so the local web app is given a real `smweb`, reading a fake
+collector. The tests use, in this order, `SMWEB_BIN` if it is set; the release
+pinned in `simple-metrics.pin` (downloaded and checked like a deploy does), when
+this machine can run the Pi's static aarch64 build - so on an aarch64 machine the
+tests run against the very binary that gets deployed; or one built with `cargo`
+from a simple-metrics checkout beside this repository. Otherwise they fail and
+say so. The network-namespace routing tests need unprivileged namespaces
+(`unshare -rn`) and `iproute2`, and skip themselves without. The tests themselves
 are split by area, one file each:
 
 | File | Area |
@@ -654,11 +700,12 @@ are split by area, one file each:
 | `test_login.py` | the login form's responses: blank, wrong and right PassKey (`local`) |
 | `test_session_lifetime.py` | session cookie lifetime and expiry (`local`) |
 | `test_diagnostics_ui.py` | the Diagnostics page in a browser (`local` and `ui`) |
-| `test_metrics_deploy.py` | how the collector gets deployed: the fetch script (download, verify, cache), the pin, the systemd unit, and that a collector upgrade can't re-run the access point's setup (`local`) |
-| `test_metrics_page.py` | the Metrics page's backend against a fake collector: validation, the collector being down or misbehaving, the JSON shape (`local`) |
+| `test_metrics_deploy.py` | how the collector and `smweb` get deployed: the fetch script (download, verify, cache), the pin, both systemd units (smweb's: unix socket only, its own runtime directory, agreeing with the web app on socket and mount point), and that an upgrade can't re-run the access point's setup (`local`) |
+| `test_metrics_page.py` | the Metrics page against the real `smweb` reading a fake collector: the login, the page around smweb's chart, validation, the collector or smweb being down or misbehaving, the assets, what can reach smweb, the JSON shape (`local`) |
+| `test_local_routing.py` | replies to connections arriving on `eth0` keep leaving through it however the network changes: the real routing script and NetworkManager hook, in a throwaway network namespace, including the link-flap that once emptied the table (`local`) |
 | `test_metrics_ui.py` | the Metrics page in a browser: the chart, the pickers, refresh, remembered choice, the collector failing, and Log out working from every page (`local` and `ui`) |
 | `test_pi_state.py` | the Pi's services, routing, permissions and leftovers (`smoke`) |
-| `test_pi_metrics.py` | the deployed collector: runs unprivileged, its socket is closed to other accounts, it is the pinned release, `~/smq` is deployed; and the Metrics page and its data through the web app (`smoke`) |
+| `test_pi_metrics.py` | the deployed collector and `smweb`: unprivileged, sockets closed to other accounts, no network listener for smweb, the pinned release, `~/smq` is deployed; and the Metrics page, its assets and its data through the web app (`smoke`) |
 | `test_pi_web.py` | login/session security and the read-only pages (`smoke`) |
 | `test_pi_diagnostics.py` | every diagnostic through the deployed web app (`smoke`) |
 | `test_reboot.py` | the Restart button, end to end, including the metrics history coming back after the reboot (`reboot`) |
@@ -718,6 +765,12 @@ diagnostics tests (and, if it takes free text, in the injection tests).
   never written to disk by this project (it does end up in OpenTofu state,
   same as `psk`) - editing wireguard-ap's own tfvars can't change it; that
   has to happen on the wireguard-router side (`scripts/wg-peer.sh update`).
+- **SSH or the web app time out from the network the Pi is plugged into, but
+  work from the AP's Wi-Fi** (and `ip route show table 101` on the Pi is
+  empty): the reply routing for `eth0` has lost its route, see the WireGuard
+  section. `sudo systemctl restart mnh-ap-local-routing.service` refills it
+  immediately; deploying the current scripts installs the hook that normally
+  does so on every network change.
 - **If `wg0` ever breaks `eth0` access** (a peer's routed LAN colliding with
   wherever the Pi is currently connected - see the WireGuard section above),
   the AP's own Wi-Fi (`ap_net`, default `10.1.1.0/24`) is on a separate
@@ -764,7 +817,5 @@ webapp/static/site.css
 webapp/static/pico.min.css      vendored, not CDN-loaded - see "Web UI"
 webapp/static/htmx.min.js       vendored, not CDN-loaded - see "Web UI"
 webapp/static/htmx-ext-sse.js   vendored, not CDN-loaded - see "Web UI"
-webapp/static/metrics.js        the Metrics page's chart code
-webapp/static/uPlot.iife.min.js vendored charting library (+ uPlot.min.css, uPlot.LICENSE)
 webapp/static/favicon.svg
 ```

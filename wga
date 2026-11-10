@@ -33,6 +33,7 @@
 #                  binary instead of the release pinned in simple-metrics.pin
 #                  (which wga otherwise downloads and verifies). For trying
 #                  a change before it is released - it skips the checksum.
+#                  The smq and smweb beside it are deployed too.
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -150,6 +151,9 @@ MSG
         # releases that predate it.
         TF_VAR_simple_metrics_cli="$("$REPO_DIR/tools/fetch_simple_metrics.sh" --cli)"
         export TF_VAR_simple_metrics_cli
+        # And smweb, the web server for the Metrics page (0.5.0 and later).
+        TF_VAR_simple_metrics_web="$("$REPO_DIR/tools/fetch_simple_metrics.sh" --web)"
+        export TF_VAR_simple_metrics_web
     fi
     ;;
 esac

@@ -1,43 +1,19 @@
 {% extends "base.html" %}
 {% block title %} - Metrics{% endblock %}
-{% block extra_css %}
-  <link rel="stylesheet" href="/static/uPlot.min.css">
-{% endblock %}
-{% block head_scripts %}
-  {{ super() }}
-  <script src="/static/uPlot.iife.min.js"></script>
-  <script src="/static/metrics.js" defer></script>
-{% endblock %}
 {% block content %}
     {% if error %}
     <article>
       <header>No metrics available</header>
-      <p>{{ error|capitalize }}. It keeps the Pi's history of CPU, memory, temperature
-        and network use; check that the <code>mnh-ap-metrics</code> service is running.</p>
+      <p>{{ error|capitalize }}. It shows the Pi's history of CPU, memory, temperature
+        and network use; check that the <code>mnh-ap-metrics-web</code> and
+        <code>mnh-ap-metrics</code> services are running.</p>
     </article>
     {% else %}
-    <div class="metric-controls">
-      <div class="field-row">
-        <label for="metric-select">Metric</label>
-        <select id="metric-select" class="fit-content">
-          {% for heading, metrics in groups %}
-          <optgroup label="{{ heading }}">
-            {% for m in metrics %}
-            <option value="{{ m.name }}">{{ m.label }}{% if m.unit %} ({{ m.unit }}){% endif %}</option>
-            {% endfor %}
-          </optgroup>
-          {% endfor %}
-        </select>
-      </div>
-      <div class="field-row">
-        <label for="range-select">Last</label>
-        <select id="range-select" class="fit-content">
-          {% for r in ranges %}<option value="{{ r }}"{% if r == "1h" %} selected{% endif %}>{{ r }}</option>{% endfor %}
-        </select>
-      </div>
-    </div>
-
-    <div id="chart" class="chart" role="img" aria-label="Chart of the selected metric over time"></div>
-    <p id="chart-status" class="chart-status" aria-live="polite">Loading...</p>
+    {#- smweb's own chart, from the metrics web service (see app.py): the
+        pickers, the chart and the links to its script and styles, which the
+        service itself writes and which this app serves under /metrics/. Our
+        own service, over a socket only this app can reach, so it is not
+        escaped. -#}
+    {{ fragment|safe }}
     {% endif %}
 {% endblock %}

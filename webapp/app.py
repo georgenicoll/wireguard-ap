@@ -21,6 +21,7 @@ import subprocess
 import time
 import uuid
 from pathlib import Path
+from urllib.parse import quote
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Request
 from fastapi.responses import (
@@ -28,6 +29,7 @@ from fastapi.responses import (
     HTMLResponse,
     JSONResponse,
     RedirectResponse,
+    Response,
     StreamingResponse,
 )
 from fastapi.staticfiles import StaticFiles
@@ -647,123 +649,109 @@ def healthz():
 
 # --- Metrics -----------------------------------------------------------------
 # The Pi's history of CPU, memory, temperature and network use is kept by a
-# separate daemon, simple-metrics (see the README's "Metrics collector"),
-# which serves it as JSON lines on a Unix socket. This app only asks it for
-# what a chart needs and passes that on; the collector does the summarising.
-METRICS_SOCKET = os.environ.get("METRICS_SOCKET", "/run/simple-metrics/simple-metrics.sock")
-# How long to wait for the collector before giving up on a request.
-METRICS_TIMEOUT = 5.0
-# The most a reply may be (a downsampled one is a few tens of KB).
-METRICS_MAX_REPLY = 8 * 1024 * 1024
-# The time ranges the page offers, by name, in seconds.
-METRICS_RANGES = {"1h": 3600, "6h": 6 * 3600, "24h": 24 * 3600, "7d": 7 * 24 * 3600}
-# A chart has nowhere near this many pixels, so more points would only cost
-# time and bandwidth: the collector averages down to (at most) this many.
-METRICS_POINTS = 600
-# The characters a metric name may have (interface names come into them).
-# Checked before a name goes anywhere near the collector.
-METRIC_NAME = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+# separate daemon, simple-metrics (see the README's "Metrics collector"), and
+# shown by a second small program from the same project, smweb, which serves
+# the chart - its markup, script, styles and data - on a Unix socket that only
+# this app can reach. smweb has no login of its own; this app is the login.
+# /metrics puts smweb's chart inside the site's own page (its nav, its look),
+# and /metrics/data and /metrics/assets/* pass smweb's answers straight on.
+# smweb is told it is mounted at /metrics (see setup_metrics.sh), so the links
+# in the chart it writes point at those routes as they are.
+METRICS_WEB_SOCKET = os.environ.get("METRICS_WEB_SOCKET", "/run/simple-metrics-web/smweb.sock")
+# How long to wait for smweb before giving up on a request.
+METRICS_WEB_TIMEOUT = 5.0
+# The most a reply may be (the biggest, the chart library, is about 50 KB).
+METRICS_WEB_MAX_REPLY = 8 * 1024 * 1024
+# What an asset's name may be. Checked before it goes into a request.
+METRICS_ASSET_NAME = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 
 
 class MetricsUnavailable(Exception):
-    """The collector couldn't be reached, or refused the request."""
+    """smweb couldn't be reached, or gave an answer that can't be used."""
 
 
-async def _metrics_request(request: dict) -> dict:
-    """Sends one request to the collector and returns its (successful) reply."""
+async def _smweb_get(path: str) -> tuple[int, dict[str, str], bytes]:
+    """GETs `path` (which the caller has made safe) from smweb over its socket.
+    Returns the status, the headers (names in lower case) and the body. smweb
+    answers one request per connection and then closes it."""
+    chunks: list[bytes] = []
     try:
-        async with asyncio.timeout(METRICS_TIMEOUT):
-            reader, writer = await asyncio.open_unix_connection(
-                METRICS_SOCKET, limit=METRICS_MAX_REPLY
-            )
+        async with asyncio.timeout(METRICS_WEB_TIMEOUT):
+            reader, writer = await asyncio.open_unix_connection(METRICS_WEB_SOCKET)
             try:
-                writer.write(json.dumps(request).encode() + b"\n")
+                writer.write(f"GET {path} HTTP/1.1\r\nHost: smweb\r\nConnection: close\r\n\r\n".encode())
                 await writer.drain()
-                line = await reader.readline()
+                total = 0
+                while chunk := await reader.read(65536):
+                    total += len(chunk)
+                    if total > METRICS_WEB_MAX_REPLY:
+                        raise ValueError("reply too large")
+                    chunks.append(chunk)
             finally:
                 writer.close()
     except (OSError, TimeoutError, ValueError) as e:
-        # ValueError is a reply over the limit. Never shown to the user in
-        # full: the details go to the log.
-        LOGGER.warning("Metrics collector request failed: %r", e)
-        raise MetricsUnavailable("the metrics collector isn't reachable") from e
+        # Never shown to the user in full: the details go to the log.
+        LOGGER.warning("Metrics web service request failed: %r", e)
+        raise MetricsUnavailable("the metrics web service isn't reachable") from e
+    head, separator, body = b"".join(chunks).partition(b"\r\n\r\n")
     try:
-        reply = json.loads(line)
+        lines = head.decode("latin-1").split("\r\n")
+        version, status, *_ = lines[0].split(" ", 2)
+        headers = {name.strip().lower(): value.strip()
+                   for name, _, value in (line.partition(":") for line in lines[1:])}
+        if not separator or not version.startswith("HTTP/1.") or \
+                int(headers.get("content-length", len(body))) != len(body):
+            raise ValueError("not a complete HTTP reply")
+        return int(status), headers, body
     except ValueError as e:
-        LOGGER.warning("Metrics collector sent something that isn't JSON: %r", line[:200])
-        raise MetricsUnavailable("the metrics collector gave an unusable reply") from e
-    if not isinstance(reply, dict) or not reply.get("ok"):
-        LOGGER.warning("Metrics collector refused a request: %r", reply)
-        raise MetricsUnavailable("the metrics collector refused the request")
-    return reply
+        LOGGER.warning("Metrics web service sent something unusable: %r", e)
+        raise MetricsUnavailable("the metrics web service gave an unusable reply") from e
 
 
-def _metric_groups(metrics: list[dict]) -> list[tuple[str, list[dict]]]:
-    """The metrics as (heading, metrics) for the picker, in a sensible order."""
-    system = [m for m in metrics if not m["name"].startswith("net_")]
-    network = [m for m in metrics if m["name"].startswith("net_")]
-    return [(name, group) for name, group in (("System", system), ("Network", network)) if group]
+async def _metrics_pass_through(path: str) -> Response:
+    """smweb's answer to `path` as this app's own: its status, type and
+    caching, and its body untouched."""
+    try:
+        status, headers, body = await _smweb_get(path)
+    except MetricsUnavailable as e:
+        return JSONResponse({"error": str(e).capitalize() + "."}, status_code=503,
+                            headers={"Cache-Control": "no-store"})
+    return Response(
+        content=body, status_code=status, media_type=headers.get("content-type"),
+        headers={"Cache-Control": headers.get("cache-control", "no-store")},
+    )
 
 
 @app.get("/metrics", response_class=HTMLResponse, dependencies=[Depends(require_login)])
 async def metrics_page(request: Request):
-    error = None
-    groups: list[tuple[str, list[dict]]] = []
+    fragment, error = "", None
     try:
-        groups = _metric_groups((await _metrics_request({"op": "metrics"}))["metrics"])
-    except MetricsUnavailable as e:
-        error = str(e)
+        status, _, body = await _smweb_get("/fragment")
+        if status != 200:
+            raise MetricsUnavailable("the metrics web service gave an unusable reply")
+        fragment = body.decode("utf-8")
+    except (MetricsUnavailable, UnicodeDecodeError) as e:
+        error = str(e) if isinstance(e, MetricsUnavailable) else "the metrics web service gave an unusable reply"
     return templates.TemplateResponse(
         request,
         "metrics.html",
-        {"show_logout": True, "groups": groups, "ranges": list(METRICS_RANGES), "error": error},
+        {"show_logout": True, "fragment": fragment, "error": error},
     )
 
 
 @app.get("/metrics/data", dependencies=[Depends(require_login)])
 async def metrics_data(metric: str = "", range: str = "1h"):
-    if not METRIC_NAME.fullmatch(metric):
-        return JSONResponse({"error": "no such metric"}, status_code=400)
-    if range not in METRICS_RANGES:
-        return JSONResponse(
-            {"error": f"range must be one of {', '.join(METRICS_RANGES)}"}, status_code=400
-        )
-    try:
-        listing = (await _metrics_request({"op": "metrics"}))["metrics"]
-        known = next((m for m in listing if m["name"] == metric), None)
-        if known is None:
-            return JSONResponse({"error": "no such metric"}, status_code=404)
-        now_ms = int(time.time() * 1000)
-        reply = await _metrics_request(
-            {
-                "op": "read",
-                "metrics": [metric],
-                "from": now_ms - METRICS_RANGES[range] * 1000,
-                "max_points": METRICS_POINTS,
-                "extremes": True,
-            }
-        )
-        return JSONResponse(
-            {
-                "metric": known,
-                "range": range,
-                "now": now_ms,
-                "step_ms": reply["step_ms"],
-                "timestamps": reply["timestamps"],
-                "avg": reply["series"][metric],
-                "min": reply["min"][metric],
-                "max": reply["max"][metric],
-            },
-            headers={"Cache-Control": "no-store"},
-        )
-    except MetricsUnavailable as e:
-        return JSONResponse({"error": str(e).capitalize() + "."}, status_code=503)
-    except (KeyError, TypeError) as e:
-        # A reply that isn't shaped as expected, e.g. from an older collector.
-        LOGGER.warning("Unexpected reply from the metrics collector: %r", e)
-        return JSONResponse(
-            {"error": "The metrics collector isn't giving usable data."}, status_code=503
-        )
+    # Re-encoded, not forwarded as received: only these two values reach smweb,
+    # and neither can add to the request line. smweb checks them as well.
+    return await _metrics_pass_through(
+        f"/data?metric={quote(metric, safe='')}&range={quote(range, safe='')}")
+
+
+@app.get("/metrics/assets/{name}", dependencies=[Depends(require_login)])
+async def metrics_asset(name: str):
+    if not METRICS_ASSET_NAME.fullmatch(name):
+        return JSONResponse({"error": "not found"}, status_code=404)
+    return await _metrics_pass_through(f"/assets/{name}")
 
 
 @app.get("/login", response_class=HTMLResponse)
