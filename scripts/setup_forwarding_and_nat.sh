@@ -7,6 +7,86 @@ ENV_FILE="$(dirname "$SCRIPT")/wireguard-ap.env"
 # shellcheck source=/dev/null
 source "$ENV_FILE"
 
+# --- the per-interface reply routing: its script, and the hook that re-runs it
+# The nft rules further down mark connections by the interface they arrived on
+# (eth0 = 0x1, the AP bridge = 0x2); these send each mark's replies out of the
+# same interface, through a routing table of its own (101, 102) holding just
+# a default route via that interface's gateway.
+#
+# That table is only as good as its last fill. Its route goes away with the
+# interface (a link flap, a new DHCP lease on a different network, moving the
+# Pi to another switch port or VLAN), while the rule pointing at the table
+# stays - and replies to a connection that came in on eth0 then fall through
+# to the main table, which can send them into wg0 (a peer's routed LAN
+# colliding with where the Pi is plugged in). SSH and the web app from that
+# network then time out, while the Pi still looks healthy from anywhere else.
+# So the script is safe to run at any moment (it updates in place, and never
+# leaves the table empty or the rule doubled), and a NetworkManager dispatcher
+# hook runs it on every network event, not only once at boot.
+#
+#   setup_forwarding_and_nat.sh --print-routing-script   prints the script
+#   setup_forwarding_and_nat.sh --print-dispatcher       prints the hook
+#                                  Each exits without needing root: for tests.
+render_routing_script() {
+  echo '#!/usr/bin/env bash'
+  echo '# Fills the per-interface routing tables the mnh_ap_route nft marks send'
+  echo '# replies through (see setup_forwarding_and_nat.sh). Safe to re-run at any'
+  echo '# time: it updates in place and is run again on every network change.'
+  echo 'set -euo pipefail'
+  printf 'BR=%q\n' "$BR"
+  cat <<'SCRIPT'
+
+setup_table() {
+  local mark=$1 table=$2 dev=$3
+  if ! ip link show dev "$dev" >/dev/null 2>&1; then
+    # No such interface (yet): nothing to send replies through.
+    ip rule del fwmark "$mark" table "$table" 2>/dev/null || true
+    ip route flush table "$table" 2>/dev/null || true
+    return 0
+  fi
+  local gw
+  gw="$(ip route show default dev "$dev" 2>/dev/null | awk '{print $3; exit}')"
+  # replace, not flush-then-add: a reply sent in between must never find the
+  # table empty. If the route can't be set (the interface is down) the table
+  # is emptied instead, rather than left pointing at a gateway that has gone.
+  if [[ -n $gw ]]; then
+    ip route replace default via "$gw" dev "$dev" table "$table" 2>/dev/null \
+      || ip route flush table "$table" 2>/dev/null || true
+  else
+    ip route replace default dev "$dev" table "$table" 2>/dev/null \
+      || ip route flush table "$table" 2>/dev/null || true
+  fi
+  # Added once: `ip rule add` happily adds the same rule again.
+  if ! ip rule show | grep -qE "fwmark ${mark} lookup ${table}( |$)"; then
+    ip rule add fwmark "$mark" table "$table" priority 100
+  fi
+}
+
+setup_table 0x1 101 eth0
+setup_table 0x2 102 "$BR"
+SCRIPT
+}
+
+render_dispatcher() {
+  cat <<'HOOK'
+#!/usr/bin/env bash
+# Installed by setup_forwarding_and_nat.sh. NetworkManager runs this on every
+# network event ($1 = interface, $2 = event): re-fill the per-interface reply
+# routing tables, which lose their route when an interface is reconfigured.
+# The events that fire before the interface is configured are skipped: the
+# gateway isn't there yet, and the "up" that follows is the one that matters.
+case "${2:-}" in
+  pre-up | pre-down | hostname) exit 0 ;;
+esac
+exec /usr/local/sbin/mnh-ap-local-routing.sh
+HOOK
+}
+
+case "${1:-}" in
+  --print-routing-script) render_routing_script; exit 0 ;;
+  --print-dispatcher) render_dispatcher; exit 0 ;;
+esac
+
 [[ $EUID -eq 0 ]] || exec sudo "$SCRIPT" "$@"
 
 echo "net.ipv4.ip_forward=1" | tee /etc/sysctl.d/90-mnh-ap.conf >/dev/null
@@ -89,34 +169,13 @@ ExecStop=/bin/sh -c '/usr/sbin/nft delete table ip mnh_ap 2>/dev/null; /usr/sbin
 WantedBy=multi-user.target
 EOF
 
-{
-  echo '#!/usr/bin/env bash'
-  echo '# Regenerates the per-interface routing tables the mnh_ap_route nft'
-  echo '# marks above send marked replies through. Safe to re-run.'
-  echo 'set -euo pipefail'
-  printf 'BR=%q\n' "$BR"
-  cat <<'SCRIPT'
-
-setup_table() {
-  local mark=$1 table=$2 dev=$3
-  ip rule del fwmark "$mark" table "$table" 2>/dev/null || true
-  ip route flush table "$table" 2>/dev/null || true
-  [[ -e /sys/class/net/$dev ]] || return 0
-  local gw
-  gw="$(ip route show default dev "$dev" 2>/dev/null | awk '{print $3; exit}')"
-  if [[ -n $gw ]]; then
-    ip route add default via "$gw" dev "$dev" table "$table"
-  else
-    ip route add default dev "$dev" table "$table"
-  fi
-  ip rule add fwmark "$mark" table "$table" priority 100
-}
-
-setup_table 0x1 101 eth0
-setup_table 0x2 102 "$BR"
-SCRIPT
-} | tee /usr/local/sbin/mnh-ap-local-routing.sh >/dev/null
+render_routing_script | tee /usr/local/sbin/mnh-ap-local-routing.sh >/dev/null
 chmod 755 /usr/local/sbin/mnh-ap-local-routing.sh
+
+# Re-run on network events, not only at boot (see the comment at the top).
+install -d -m 755 /etc/NetworkManager/dispatcher.d
+render_dispatcher | tee /etc/NetworkManager/dispatcher.d/91-mnh-ap-local-routing >/dev/null
+chmod 755 /etc/NetworkManager/dispatcher.d/91-mnh-ap-local-routing
 
 tee /etc/systemd/system/mnh-ap-local-routing.service >/dev/null <<'EOF'
 [Unit]
