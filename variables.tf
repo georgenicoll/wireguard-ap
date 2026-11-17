@@ -132,3 +132,29 @@ variable "simple_metrics_web" {
   type        = string
   default     = ""
 }
+
+# --- Version shown in the web app's footer -----------------------------------
+
+variable "wga_commit" {
+  description = "The wireguard-ap commit being deployed (full hash). Populated automatically by wga from git - not meant to be set by hand. Empty means unknown (tofu run without wga)."
+  type        = string
+  default     = ""
+}
+
+variable "wga_commit_date" {
+  description = "The date (YYYY-MM-DD) of wga_commit. Populated by wga."
+  type        = string
+  default     = ""
+}
+
+variable "wga_dirty" {
+  description = "\"true\" if the working tree had uncommitted changes when deployed (so the commit isn't exactly what's running). Populated by wga."
+  type        = string
+  default     = "false"
+}
+
+variable "wga_repo_url" {
+  description = "https URL of the wireguard-ap repository on GitHub, for linking to the commit. Populated by wga from the origin remote; empty gives no link."
+  type        = string
+  default     = ""
+}

@@ -18,5 +18,10 @@
     {% block content %}{% endblock %}
   </main>
   {% block after_main %}{% endblock %}
+  {% set v = app_versions() %}
+  <footer id="version-footer">
+    <span>wireguard-ap {% if v.app.url %}<a href="{{ v.app.url }}" target="_blank" rel="noopener">{{ v.app.text }}</a>{% else %}{{ v.app.text }}{% endif %}</span>
+    {% if v.metrics %}<span>simple-metrics {% if v.metrics.url %}<a href="{{ v.metrics.url }}" target="_blank" rel="noopener">{{ v.metrics.text }}</a>{% else %}{{ v.metrics.text }}{% endif %}</span>{% endif %}
+  </footer>
 </body>
 </html>

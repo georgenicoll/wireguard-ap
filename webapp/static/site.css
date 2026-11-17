@@ -412,3 +412,35 @@ select.fit-content {
 .diagnostic-picker {
   margin-bottom: var(--pico-spacing);
 }
+
+/* The version line: a thin strip fixed to the bottom of the window, so it is
+   always on screen however big the window or long the page, and takes little
+   room. The page gets matching bottom padding so nothing is hidden behind it. */
+#version-footer {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 10;
+  /* Pico gives body>footer a centred, width-limited container: not here. */
+  width: auto;
+  max-width: none;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0 1.25rem;
+  margin: 0;
+  padding: 0.15rem 0.75rem;
+  font-size: 0.7rem;
+  line-height: 1.4;
+  color: var(--pico-muted-color);
+  background: var(--pico-background-color);
+  border-top: 1px solid var(--pico-muted-border-color);
+}
+#version-footer a {
+  color: inherit;
+  text-decoration: underline dotted;
+}
+body {
+  padding-bottom: 2.2rem;
+}

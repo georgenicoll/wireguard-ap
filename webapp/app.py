@@ -20,10 +20,11 @@ import socket
 import subprocess
 import time
 import uuid
+from functools import lru_cache
 from pathlib import Path
 from urllib.parse import quote
 
-from fastapi import Depends, FastAPI, Form, HTTPException, Request
+from fastapi import Depends, FastAPI, Form, HTTPException, Query, Request
 from fastapi.responses import (
     FileResponse,
     HTMLResponse,
@@ -366,6 +367,53 @@ app.add_middleware(
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 templates = Jinja2Templates(directory=BASE_DIR / "templates")
 
+# --- Versions shown in every page's footer -----------------------------------
+# wireguard-ap has no release numbers: its version is the commit it was
+# deployed from (wga records it in this file; see version_deploy in main.tf).
+# simple-metrics is asked for its own version, so the footer says what is
+# really installed.
+VERSION_FILE = Path(os.environ.get("VERSION_FILE", str(SCRIPTS_DIR / "wireguard-ap.version")))
+SMWEB_BINARY = os.environ.get("SMWEB_BINARY", "/usr/local/bin/smweb")
+SIMPLE_METRICS_REPO = "https://github.com/georgenicoll/simple-metrics"
+
+
+@lru_cache(maxsize=1)
+def _simple_metrics_version() -> str:
+    try:
+        out = subprocess.run([SMWEB_BINARY, "--version"], capture_output=True, text=True,
+                             timeout=3, check=True).stdout
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    match = re.search(r"\b(\d+\.\d+\.\d+\S*)", out)
+    return match.group(1) if match else ""
+
+
+def app_versions() -> dict:
+    """What the footer shows: {"app": {...}, "metrics": {...}}, each with
+    `text` and, where there is something to link to, `url`."""
+    app = {"text": "unknown"}
+    try:
+        info = json.loads(VERSION_FILE.read_text())
+        commit = str(info.get("commit") or "")
+        if commit:
+            dirty = bool(info.get("dirty"))
+            text = commit[:7] + ("-dirty" if dirty else "")
+            if info.get("date"):
+                text += f" ({info['date']})"
+            app = {"text": text}
+            repo = str(info.get("url") or "")
+            if repo.startswith("https://") and not dirty and re.fullmatch(r"[0-9a-f]{7,40}", commit):
+                app["url"] = f"{repo}/commit/{commit}"
+    except (OSError, ValueError, AttributeError):
+        pass
+    metrics = {}
+    if version := _simple_metrics_version():
+        metrics = {"text": version, "url": f"{SIMPLE_METRICS_REPO}/releases/tag/v{version}"}
+    return {"app": app, "metrics": metrics}
+
+
+templates.env.globals["app_versions"] = app_versions
+
 
 @app.get("/sw.js")
 async def service_worker():
@@ -654,7 +702,7 @@ def healthz():
 # the chart - its markup, script, styles and data - on a Unix socket that only
 # this app can reach. smweb has no login of its own; this app is the login.
 # /metrics puts smweb's chart inside the site's own page (its nav, its look),
-# and /metrics/data and /metrics/assets/* pass smweb's answers straight on.
+# and /metrics/series, /metrics/data and /metrics/assets/* pass smweb's answers straight on.
 # smweb is told it is mounted at /metrics (see setup_metrics.sh), so the links
 # in the chart it writes point at those routes as they are.
 METRICS_WEB_SOCKET = os.environ.get("METRICS_WEB_SOCKET", "/run/simple-metrics-web/smweb.sock")
@@ -745,6 +793,23 @@ async def metrics_data(metric: str = "", range: str = "1h"):
     # and neither can add to the request line. smweb checks them as well.
     return await _metrics_pass_through(
         f"/data?metric={quote(metric, safe='')}&range={quote(range, safe='')}")
+
+
+@app.get("/metrics/series", dependencies=[Depends(require_login)])
+async def metrics_series(metric: list[str] = Query(default=[]), range: str | None = None,
+                         from_ms: str | None = Query(default=None, alias="from"),
+                         to_ms: str | None = Query(default=None, alias="to")):
+    """The data for every graph on the page in one request: smweb's /series,
+    which reads all the metrics from the collector together. As for /data, the
+    query is rebuilt from just these values, each re-encoded."""
+    parts = [f"metric={quote(m, safe='')}" for m in metric]
+    if range is not None:
+        parts.append(f"range={quote(range, safe='')}")
+    if from_ms is not None:
+        parts.append(f"from={quote(from_ms, safe='')}")
+    if to_ms is not None:
+        parts.append(f"to={quote(to_ms, safe='')}")
+    return await _metrics_pass_through("/series?" + "&".join(parts))
 
 
 @app.get("/metrics/assets/{name}", dependencies=[Depends(require_login)])

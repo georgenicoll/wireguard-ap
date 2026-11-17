@@ -278,6 +278,46 @@ resource "terraform_data" "ap_deploy" {
   # ssh <pi_user>@<pi_host> '~/uplink_wifi.sh "some-hotel-wifi" "password"'
 }
 
+# Which version of this repo is deployed, for the web app's footer: a small
+# file the app reads as it serves each page. Its own resource, so a new commit
+# only rewrites this file - it never re-runs anything in ap_deploy (setup_ap.sh
+# takes the access point down and back up) and needs no service restart.
+resource "terraform_data" "version_deploy" {
+  triggers_replace = {
+    commit = var.wga_commit
+    date   = var.wga_commit_date
+    dirty  = var.wga_dirty
+    url    = var.wga_repo_url
+  }
+
+  # After ap_deploy on a first deploy, so the home directory is set up.
+  depends_on = [terraform_data.ap_deploy]
+
+  connection {
+    type        = "ssh"
+    host        = var.pi_host
+    user        = var.pi_user
+    private_key = var.ssh_private_key_path != "" ? file(var.ssh_private_key_path) : null
+    agent       = var.ssh_private_key_path == ""
+    timeout     = "20s"
+  }
+
+  provisioner "file" {
+    content = jsonencode({
+      commit = var.wga_commit
+      date   = var.wga_commit_date
+      dirty  = var.wga_dirty == "true"
+      url    = var.wga_repo_url
+    })
+    destination = "${local.remote_dir}/wireguard-ap.version"
+  }
+
+  provisioner "remote-exec" {
+    # Explicit mode: the web service's user must be able to read it.
+    inline = ["chmod 644 ${local.remote_dir}/wireguard-ap.version"]
+  }
+}
+
 # The metrics collector (github.com/georgenicoll/simple-metrics): a separate
 # small daemon, installed and run by setup_metrics.sh. Its own resource, so it
 # is redeployed - on a new release or a change to its setup script - without
