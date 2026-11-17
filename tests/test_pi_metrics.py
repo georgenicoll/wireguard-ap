@@ -44,7 +44,7 @@ class TestPiMetrics:
             pytest.skip("the pinned release predates smq")
         r = pi.ssh("smq info")
         assert r.returncode == 0, r.stderr
-        assert "metrics      15" in r.stdout, r.stdout
+        assert "metrics      17" in r.stdout, r.stdout
         assert "cpu_percent" in pi.out("smq metrics")
         # Through the sudo rule, so a plain (unwrapped) ~/smq is still refused.
         assert pi.ssh(f"~/smq --socket {SOCKET} info").returncode != 0
@@ -193,7 +193,7 @@ class TestPiMetricsWeb:
 
 
 def metric_names(html: str) -> list[str]:
-    select = re.search(r'<select id="metric-select".*?</select>', html, re.S).group(0)
+    select = re.search(r'<select class="metric-select[^"]*".*?</select>', html, re.S).group(0)
     return re.findall(r'<option value="([^"]+)"', select)
 
 
@@ -204,7 +204,8 @@ class TestPiMetricsPage:
     def test_the_page_needs_a_login(self, pi):
         from support import Web
         anonymous = Web(pi.base_url, "not-the-passkey")
-        for path in ("/metrics", "/metrics/data?metric=cpu_percent&range=1h"):
+        for path in ("/metrics", "/metrics/data?metric=cpu_percent&range=1h",
+                     "/metrics/series?metric=cpu_percent&range=1h"):
             r = anonymous.get(path)
             assert r.status_code in (303, 401) or r.url.path == "/login", path
 
@@ -213,7 +214,7 @@ class TestPiMetricsPage:
         assert r.status_code == 200
         assert "No metrics available" not in r.text, "the web app cannot reach the collector"
         names = metric_names(r.text)
-        assert len(names) == 15, names
+        assert len(names) == 17, names
         assert {"cpu_percent", "load1", "mem_used_bytes", "swap_used_bytes",
                 "cpu_temp_celsius"} <= set(names)
 
@@ -227,6 +228,13 @@ class TestPiMetricsPage:
                 n = len(data["timestamps"])
                 assert n > 0 and n <= 600, (name, span, n)
                 assert len(data["avg"]) == len(data["min"]) == len(data["max"]) == n
+
+    def test_one_series_request_serves_several_metrics(self, pi_web):
+        data = pi_web.get("/metrics/series?metric=cpu_percent&metric=load1&range=1h").json()
+        assert set(data["metrics"]) == {"cpu_percent", "load1"}
+        n = len(data["timestamps"])
+        assert 0 < n <= 600
+        assert all(len(m["avg"]) == n for m in data["metrics"].values())
 
     def test_the_data_is_recent(self, pi_web):
         data = pi_web.get("/metrics/data?metric=cpu_percent&range=1h").json()
@@ -243,7 +251,7 @@ class TestPiMetricsPage:
             pytest.skip("the pinned release predates smweb")
         page = pi_web.get("/metrics").text
         assert "/metrics/assets/metrics.js" in page and "/metrics/assets/uPlot.iife.min.js" in page
-        assert 'data-url="/metrics/data"' in page
+        assert 'data-url="/metrics/series"' in page
         assert "http://" not in page and "https://" not in page, "nothing from the internet"
         for name, kind in (("metrics.js", "javascript"), ("uPlot.iife.min.js", "javascript"),
                            ("metrics.css", "css"), ("uPlot.min.css", "css")):

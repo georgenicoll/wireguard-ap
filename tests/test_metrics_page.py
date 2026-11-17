@@ -26,6 +26,7 @@ def web(local_server) -> Web:
 @pytest.mark.local
 class TestMetricsPage:
     @pytest.mark.parametrize("path", ["/metrics", "/metrics/data?metric=cpu_percent&range=1h",
+                                      "/metrics/series?metric=cpu_percent&range=1h",
                                       "/metrics/assets/metrics.js"])
     def test_it_needs_a_login(self, local_server, path):
         r = Web(local_server.base_url, LOCAL_PSK).get(path)
@@ -53,13 +54,13 @@ class TestMetricsPage:
         text = web.get("/metrics").text
         assert "/metrics/assets/uPlot.iife.min.js" in text and "/metrics/assets/metrics.js" in text
         assert "/metrics/assets/uPlot.min.css" in text
-        assert 'data-url="/metrics/data"' in text, "where the chart fetches its data from"
+        assert 'data-url="/metrics/series"' in text, "where the charts fetch their data from"
         assert "http://" not in text and "https://" not in text
 
     def test_it_is_the_sites_own_page_around_smwebs_chart(self, web, collector):
         text = web.get("/metrics").text
         assert text.count("<html") == 1 and "<title>mnh-ap - Metrics</title>" in text
-        assert "<nav>" in text and 'id="chart"' in text, "the site's nav, smweb's chart"
+        assert "<nav>" in text and 'id="graphs"' in text, "the site's nav, smweb's charts"
         assert "htmx.min.js" in text, "every page with the nav needs htmx for Log out to work"
 
     def test_the_nav_links_to_it_and_marks_it_current(self, web, collector):
@@ -79,6 +80,54 @@ class TestMetricsPage:
         collector.mode = "error"
         r = web.get("/metrics")
         assert r.status_code == 200 and "No metrics available" in r.text
+
+
+@pytest.mark.local
+class TestMetricsSeries:
+    """/metrics/series: what the page's graphs fetch, all of them in one request."""
+
+    def reads(self, collector):
+        return [r for r in collector.requests if r["op"] == "read"]
+
+    def test_several_metrics_come_back_together_from_one_collector_read(self, web, collector):
+        r = web.get("/metrics/series?metric=cpu_percent&metric=load1&range=1h")
+        assert r.status_code == 200, r.text
+        data = r.json()
+        assert set(data["metrics"]) == {"cpu_percent", "load1"}
+        n = len(data["timestamps"])
+        for one in data["metrics"].values():
+            assert len(one["avg"]) == len(one["min"]) == len(one["max"]) == n
+        assert data["metrics"]["load1"]["metric"]["name"] == "load1"
+        reads = self.reads(collector)
+        assert len(reads) == 1 and reads[0]["metrics"] == ["cpu_percent", "load1"]
+
+    def test_a_selected_period_is_passed_on_as_from_and_to(self, web, collector):
+        now = int(time.time() * 1000)
+        r = web.get(f"/metrics/series?metric=cpu_percent&from={now - 600_000}&to={now - 60_000}")
+        assert r.status_code == 200, r.text
+        read = self.reads(collector)[0]
+        assert read["from"] == now - 600_000 and read["to"] == now - 60_000
+        assert r.json()["range"] == "custom"
+
+    @pytest.mark.parametrize("query", [
+        "", "metric=a%20b", "metric=cpu_percent&from=1000", "metric=cpu_percent&from=5000&to=1000",
+        "metric=cpu_percent&from=x&to=y", "metric=cpu_percent&range=1y",
+    ])
+    def test_bad_requests_are_refused_without_asking_the_collector(self, web, collector, query):
+        assert web.get(f"/metrics/series?{query}").status_code == 400
+        assert self.reads(collector) == []
+
+    def test_an_unknown_metric_is_a_404(self, web, collector):
+        assert web.get("/metrics/series?metric=cpu_percent&metric=nope").status_code == 404
+
+    def test_a_down_collector_is_a_503(self, web, collector):
+        collector.mode = "down"
+        assert web.get("/metrics/series?metric=cpu_percent").status_code == 503
+
+    def test_nothing_else_in_the_query_reaches_smweb(self, web, collector):
+        r = web.get("/metrics/series?metric=cpu_percent&range=1h&op=shutdown")
+        assert r.status_code == 200
+        assert not [q for q in collector.requests if q["op"] not in ("metrics", "read")]
 
 
 @pytest.mark.local
@@ -219,7 +268,7 @@ class TestMetricsWebService:
         assert web.get("/metrics/data?metric=cpu_percent").status_code == 503
         smweb_service.start()
         assert web.get("/metrics/data?metric=cpu_percent").status_code == 200
-        assert 'id="chart"' in web.get("/metrics").text
+        assert 'id="graphs"' in web.get("/metrics").text
 
 
 @pytest.mark.local

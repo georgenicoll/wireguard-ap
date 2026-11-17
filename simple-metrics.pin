@@ -9,5 +9,5 @@
 # To upgrade: pick the release, then copy the checksum for
 # simple-metrics-<version>-aarch64-unknown-linux-musl.tar.gz from the
 # SHA256SUMS file on that release's GitHub page, and change both lines.
-SIMPLE_METRICS_VERSION=v0.5.3
-SIMPLE_METRICS_SHA256=ae4bec8ef3dc4ea1a5886e306a0fdf32733dc1c474271c5845dcbeab928bf912
+SIMPLE_METRICS_VERSION=v0.7.0
+SIMPLE_METRICS_SHA256=88cd388b7c49d1b9666a0c37fc9620f30cbca511b42a9b7f7c313f88db2c7e10

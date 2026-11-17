@@ -431,7 +431,7 @@ app's group can enter, so the web app is the only thing that can reach it. (It
 has a directory of its own because systemd removes a service's runtime directory
 when it stops, which would take the collector's socket with it on a restart.)
 The web app is the login: `/metrics` puts smweb's chart inside the site's own
-page, and `/metrics/data` and `/metrics/assets/*` pass smweb's answers on, behind
+page, and `/metrics/series`, `/metrics/data` and `/metrics/assets/*` pass smweb's answers on, behind
 the login. smweb is told it is mounted at `/metrics`, so the links in the chart it
 writes point at those routes. A release without `smweb` is deployed without it, and
 the Metrics page says it has nothing to show.
@@ -485,14 +485,20 @@ baked into the initial HTML, plus links to two status pages:
   below) already allows `diagnostics_sudo.sh --run-command <anything>`.
   `diagnostics_lib.sh` is the registry/argument-checking code both scripts
   source.
-- **`/metrics`** — a chart of one metric at a time (CPU, load, memory, swap,
-  temperature, and each interface's receive/transmit rate) over the last 1h,
-  6h, 24h or 7d, refreshed every 5 seconds while the tab is visible. The chart is
+- **`/metrics`** — one or more charts, each of one metric (CPU, load, memory, swap,
+  temperature, and each interface's receive/transmit rate), over the last 1h,
+  6h, 24h or 7d, refreshed every 5 seconds while the tab is visible. **Add**
+  puts another graph underneath (the bin removes one; one always stays), and the
+  layout is remembered in a cookie. All graphs share the range and the hover
+  cursor, and dragging across any graph selects that period for all of them
+  (**Reset** goes back to "Last"). The chart is
   `smweb`'s (see "Metrics collector"), reached over its socket
   (`METRICS_WEB_SOCKET` overrides the path): `/metrics` wraps it in the site's own
-  page, and `/metrics/data?metric=<name>&range=<1h|6h|24h|7d>` and
-  `/metrics/assets/<name>` are passed straight through, after the login. The
-  query is rebuilt from just those two values (re-encoded, so nothing in it can
+  page, and `/metrics/series?metric=<name>&metric=<name>...&range=<1h|6h|24h|7d>`
+  (or `from=<ms>&to=<ms>` for a selected period; this is what the page uses, one
+  request for all its graphs), `/metrics/data?metric=<name>&range=...` (one metric)
+  and `/metrics/assets/<name>` are passed straight through, after the login. The
+  query is rebuilt from just those values (re-encoded, so nothing in it can
   add to the request), and smweb validates both, asks the collector for at most
   600 points (each the mean of its time bucket, with the min and max, drawn as
   a line and a shaded band, so a short spike still shows on a week-long chart)

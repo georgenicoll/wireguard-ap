@@ -228,9 +228,10 @@ class FakeCollector:
         names = request["metrics"]
         now = int(time.time() * 1000)
         start = request.get("from", now - 3_600_000)
-        step = max(5000, -(-(now - start) // request["max_points"]))
+        end = request.get("to", now)
+        step = max(5000, -(-(end - start) // request["max_points"]))
         step = -(-step // 5000) * 5000
-        stamps = list(range(start - start % step, now + 1, step))
+        stamps = list(range(start - start % step, end + 1, step))
         avg = {n: [] for n in names}
         for i, t in enumerate(stamps):
             for n in names:

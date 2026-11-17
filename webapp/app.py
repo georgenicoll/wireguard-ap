@@ -23,7 +23,7 @@ import uuid
 from pathlib import Path
 from urllib.parse import quote
 
-from fastapi import Depends, FastAPI, Form, HTTPException, Request
+from fastapi import Depends, FastAPI, Form, HTTPException, Query, Request
 from fastapi.responses import (
     FileResponse,
     HTMLResponse,
@@ -654,7 +654,7 @@ def healthz():
 # the chart - its markup, script, styles and data - on a Unix socket that only
 # this app can reach. smweb has no login of its own; this app is the login.
 # /metrics puts smweb's chart inside the site's own page (its nav, its look),
-# and /metrics/data and /metrics/assets/* pass smweb's answers straight on.
+# and /metrics/series, /metrics/data and /metrics/assets/* pass smweb's answers straight on.
 # smweb is told it is mounted at /metrics (see setup_metrics.sh), so the links
 # in the chart it writes point at those routes as they are.
 METRICS_WEB_SOCKET = os.environ.get("METRICS_WEB_SOCKET", "/run/simple-metrics-web/smweb.sock")
@@ -745,6 +745,23 @@ async def metrics_data(metric: str = "", range: str = "1h"):
     # and neither can add to the request line. smweb checks them as well.
     return await _metrics_pass_through(
         f"/data?metric={quote(metric, safe='')}&range={quote(range, safe='')}")
+
+
+@app.get("/metrics/series", dependencies=[Depends(require_login)])
+async def metrics_series(metric: list[str] = Query(default=[]), range: str | None = None,
+                         from_ms: str | None = Query(default=None, alias="from"),
+                         to_ms: str | None = Query(default=None, alias="to")):
+    """The data for every graph on the page in one request: smweb's /series,
+    which reads all the metrics from the collector together. As for /data, the
+    query is rebuilt from just these values, each re-encoded."""
+    parts = [f"metric={quote(m, safe='')}" for m in metric]
+    if range is not None:
+        parts.append(f"range={quote(range, safe='')}")
+    if from_ms is not None:
+        parts.append(f"from={quote(from_ms, safe='')}")
+    if to_ms is not None:
+        parts.append(f"to={quote(to_ms, safe='')}")
+    return await _metrics_pass_through("/series?" + "&".join(parts))
 
 
 @app.get("/metrics/assets/{name}", dependencies=[Depends(require_login)])
