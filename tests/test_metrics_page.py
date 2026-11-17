@@ -55,6 +55,7 @@ class TestMetricsPage:
         assert "/metrics/assets/uPlot.iife.min.js" in text and "/metrics/assets/metrics.js" in text
         assert "/metrics/assets/uPlot.min.css" in text
         assert 'data-url="/metrics/series"' in text, "where the charts fetch their data from"
+        text = re.sub(r"<footer id=\"version-footer\">.*?</footer>", "", text, flags=re.S)  # its links are plain links
         assert "http://" not in text and "https://" not in text
 
     def test_it_is_the_sites_own_page_around_smwebs_chart(self, web, collector):

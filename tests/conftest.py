@@ -148,7 +148,7 @@ def collector(fake_collector):
 
 
 @pytest.fixture(scope="session")
-def local_server(fake_collector, smweb):
+def local_server(fake_collector, smweb, smweb_binary):
     if not shutil.which("uv") or not shutil.which("openssl"):
         pytest.fail("the local tier needs uv and openssl on PATH")
     tmp = Path(tempfile.mkdtemp(prefix="wga-it-"))
@@ -165,6 +165,10 @@ def local_server(fake_collector, smweb):
         "WEBAPP_CERT": str(tmp / "c.pem"), "WEBAPP_KEY": str(tmp / "k.pem"),
         "PYTHONDONTWRITEBYTECODE": "1",
         "METRICS_WEB_SOCKET": str(smweb.socket),
+        # The footer's versions: a version file the tests can rewrite, and an
+        # smweb that can say its own.
+        "VERSION_FILE": str(tmp / "wireguard-ap.version"),
+        "SMWEB_BINARY": str(smweb_binary),
     }
     log = open(tmp / "server.log", "w")
     # Own process group, so teardown stops exactly what this started.

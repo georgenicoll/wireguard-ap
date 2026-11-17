@@ -139,6 +139,25 @@ MSG
         export TF_VAR_wireguard_client_config
     fi
 
+    # Which commit is being deployed, for the web app's footer. Read from git
+    # on this machine (the Pi has no checkout); "-dirty" is recorded if the
+    # working tree has uncommitted changes, since then the commit isn't
+    # exactly what is running.
+    if git -C "$REPO_DIR" rev-parse --git-dir >/dev/null 2>&1; then
+        TF_VAR_wga_commit="$(git -C "$REPO_DIR" rev-parse HEAD)"
+        TF_VAR_wga_commit_date="$(git -C "$REPO_DIR" show -s --format=%cs HEAD)"
+        if [[ -n "$(git -C "$REPO_DIR" status --porcelain --untracked-files=no)" ]]; then
+            TF_VAR_wga_dirty=true
+        else
+            TF_VAR_wga_dirty=false
+        fi
+        # git@github.com:owner/repo.git or https://github.com/owner/repo.git
+        # -> https://github.com/owner/repo
+        TF_VAR_wga_repo_url="$(git -C "$REPO_DIR" remote get-url origin 2>/dev/null |
+            sed -E 's#^git@([^:]+):#https://\1/#; s#\.git$##' || true)"
+        export TF_VAR_wga_commit TF_VAR_wga_commit_date TF_VAR_wga_dirty TF_VAR_wga_repo_url
+    fi
+
     # The simple-metrics collector binary: the release pinned in
     # simple-metrics.pin, downloaded and checked against the pinned checksum
     # (or SIMPLE_METRICS_BIN, to try a local build). Fetched here, on this

@@ -20,6 +20,7 @@ import socket
 import subprocess
 import time
 import uuid
+from functools import lru_cache
 from pathlib import Path
 from urllib.parse import quote
 
@@ -365,6 +366,53 @@ app.add_middleware(
 )
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 templates = Jinja2Templates(directory=BASE_DIR / "templates")
+
+# --- Versions shown in every page's footer -----------------------------------
+# wireguard-ap has no release numbers: its version is the commit it was
+# deployed from (wga records it in this file; see version_deploy in main.tf).
+# simple-metrics is asked for its own version, so the footer says what is
+# really installed.
+VERSION_FILE = Path(os.environ.get("VERSION_FILE", str(SCRIPTS_DIR / "wireguard-ap.version")))
+SMWEB_BINARY = os.environ.get("SMWEB_BINARY", "/usr/local/bin/smweb")
+SIMPLE_METRICS_REPO = "https://github.com/georgenicoll/simple-metrics"
+
+
+@lru_cache(maxsize=1)
+def _simple_metrics_version() -> str:
+    try:
+        out = subprocess.run([SMWEB_BINARY, "--version"], capture_output=True, text=True,
+                             timeout=3, check=True).stdout
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    match = re.search(r"\b(\d+\.\d+\.\d+\S*)", out)
+    return match.group(1) if match else ""
+
+
+def app_versions() -> dict:
+    """What the footer shows: {"app": {...}, "metrics": {...}}, each with
+    `text` and, where there is something to link to, `url`."""
+    app = {"text": "unknown"}
+    try:
+        info = json.loads(VERSION_FILE.read_text())
+        commit = str(info.get("commit") or "")
+        if commit:
+            dirty = bool(info.get("dirty"))
+            text = commit[:7] + ("-dirty" if dirty else "")
+            if info.get("date"):
+                text += f" ({info['date']})"
+            app = {"text": text}
+            repo = str(info.get("url") or "")
+            if repo.startswith("https://") and not dirty and re.fullmatch(r"[0-9a-f]{7,40}", commit):
+                app["url"] = f"{repo}/commit/{commit}"
+    except (OSError, ValueError, AttributeError):
+        pass
+    metrics = {}
+    if version := _simple_metrics_version():
+        metrics = {"text": version, "url": f"{SIMPLE_METRICS_REPO}/releases/tag/v{version}"}
+    return {"app": app, "metrics": metrics}
+
+
+templates.env.globals["app_versions"] = app_versions
 
 
 @app.get("/sw.js")

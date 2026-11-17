@@ -252,6 +252,7 @@ class TestPiMetricsPage:
         page = pi_web.get("/metrics").text
         assert "/metrics/assets/metrics.js" in page and "/metrics/assets/uPlot.iife.min.js" in page
         assert 'data-url="/metrics/series"' in page
+        page = re.sub(r"<footer id=\"version-footer\">.*?</footer>", "", page, flags=re.S)  # plain links, not loads
         assert "http://" not in page and "https://" not in page, "nothing from the internet"
         for name, kind in (("metrics.js", "javascript"), ("uPlot.iife.min.js", "javascript"),
                            ("metrics.css", "css"), ("uPlot.min.css", "css")):

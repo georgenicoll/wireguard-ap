@@ -446,6 +446,18 @@ you work on it.
 
 ## Web UI
 
+**Versions.** Every page has a thin strip fixed to the bottom of the window
+saying what is running: `wireguard-ap <commit> (<date>)`, linking to that commit
+on GitHub, and `simple-metrics <version>`, linking to its release. wireguard-ap
+has no release numbers, so its version is the commit it was deployed from:
+`./wga` reads it from git when it applies and writes it to
+`~/wireguard-ap.version` on the Pi (its own small step, so a new commit doesn't
+re-run `setup_ap.sh`; the web app reads the file as it serves each page). A
+deploy from a working tree with uncommitted changes shows `<commit>-dirty` and
+no link, since that commit isn't exactly what is running; run `tofu` directly
+(without `wga`) and it says `unknown`. The simple-metrics version is what the
+installed `smweb` reports for itself.
+
 A small FastAPI + [htmx](https://htmx.org) app. The main page shows the Pi's
 hostname and IP address, fetched via htmx from `/api/hostinfo` rather than
 baked into the initial HTML, plus links to two status pages:
