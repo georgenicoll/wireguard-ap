@@ -444,3 +444,8 @@ select.fit-content {
 body {
   padding-bottom: 2.2rem;
 }
+/* The Metrics page's time bar (from smweb's metrics.css) sticks to the foot of
+   the window: this keeps it just above the version line, not behind it. */
+:root {
+  --time-dock-bottom: 1.4rem;
+}
