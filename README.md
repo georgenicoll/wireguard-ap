@@ -341,11 +341,13 @@ were built from.
 
 ## Metrics collector
 
-The Pi keeps a rolling history of its own CPU, load, memory, swap, temperature
-and network traffic (`eth0`, both radios, `br-ap` and `wg0`), sampled every 5
+The Pi keeps a rolling history of its own CPU, load, memory, swap, temperature,
+network traffic (`eth0`, both radios, `br-ap` and `wg0`) and disk activity (read,
+write and total rates, and how busy, for each physical disk), sampled every 5
 seconds for 7 days. That is done by
 [simple-metrics](https://github.com/georgenicoll/simple-metrics), a small
-separate Rust daemon (about 17 MB of RAM, all taken when it starts), which
+separate Rust daemon (about 20 MB of RAM with one disk, all taken when it
+starts), which
 serves it on a Unix socket for the web app to read. The history is also kept
 in a file, so it survives restarts and reboots.
 
@@ -498,8 +500,8 @@ baked into the initial HTML, plus links to two status pages:
   `diagnostics_lib.sh` is the registry/argument-checking code both scripts
   source.
 - **`/metrics`** — one or more charts, each of one metric (CPU, load, memory, swap,
-  temperature, and each interface's receive/transmit rate), over the last 1h,
-  6h, 24h or 7d, refreshed every 5 seconds while the tab is visible. **Add**
+  temperature, each interface's receive/transmit rate, and each disk's activity),
+  over the last 1h, 6h, 24h or 7d, refreshed every 5 seconds while the tab is visible. **Add**
   puts another graph underneath (the bin removes one; one always stays), and the
   layout is remembered in a cookie. All graphs share the range and the hover
   cursor, and dragging across any graph selects that period for all of them
