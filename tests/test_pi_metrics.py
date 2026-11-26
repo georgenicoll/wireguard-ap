@@ -214,7 +214,11 @@ class TestPiMetricsPage:
         assert r.status_code == 200
         assert "No metrics available" not in r.text, "the web app cannot reach the collector"
         names = metric_names(r.text)
-        assert len(names) == 17, names
+        disks = [name for name in names if name.startswith("disk_")]
+        # 7 system metrics and two for each of the five interfaces, then four
+        # for each physical disk the Pi has (at least the one it boots from).
+        assert len(names) - len(disks) == 17, names
+        assert disks and len(disks) % 4 == 0, names
         assert {"cpu_percent", "load1", "mem_used_bytes", "swap_used_bytes",
                 "cpu_temp_celsius"} <= set(names)
 
